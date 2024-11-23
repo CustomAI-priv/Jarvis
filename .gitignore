@@ -40,3 +40,4 @@ chat_history.db
 *.xls
 *.xlsx
 backend/api_keys.py
+biz_evalkey
