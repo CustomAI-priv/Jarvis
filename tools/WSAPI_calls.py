@@ -1,6 +1,10 @@
 from xml.sax import saxutils
 import xml.etree.ElementTree as ET
 import requests
+import base64
+from datetime import datetime
+import xmltodict
+from pprint import pprint
 
 # Define the URL for the SOAP service
 url = 'https://affwsapi.ams360.com/v2/service.asmx'
@@ -304,7 +308,7 @@ def getBrokerList(escaped_token , last_name_prefix = "Jo", filter_active = "true
     print("Severity:", severity)
 
 
-def getClaimList(escaped_token, claim_number = "12345",policy_number = "ABC-12345",get_related_data = True):
+def getClaimList(escaped_token, claim_number = "12345",policy_number = "ABC-12345",get_related_data = 'true'):
 
     url = 'https://affwsapi.ams360.com/v2/service.asmx'
     # SOAP Request Body (as XML)
@@ -324,9 +328,6 @@ def getClaimList(escaped_token, claim_number = "12345",policy_number = "ABC-1234
       </soap12:Body>
     </soap12:Envelope>
     """
-    # Debugging: print the full SOAP request to check the structure
-    print("SOAP Body:")
-    print(soap_body)
 
     # Headers (Note that Token should be a string and passed as plain text)
     headers = {
@@ -337,36 +338,7 @@ def getClaimList(escaped_token, claim_number = "12345",policy_number = "ABC-1234
 
     # Send the SOAP request using requests.post
     response = requests.post(url, data=soap_body, headers=headers)
-
-    # Check the response
-    if response.status_code == 200:
-        print("Response Data:", response.text)
-    else:
-        print(f"Error: {response.status_code}")
-        print(f"Response Body: {response.text}")
-
-    # Parse the XML
-    root = ET.fromstring(response.text)
-    # Parse the response
-    # Define namespaces
-    ns = {
-        'soap': 'http://www.w3.org/2003/05/soap-envelope',
-        'wsapi': 'http://www.WSAPI.AMS360.com/v2.0'
-    }
-
-    # Extract data
-    overall_result = root.find('.//wsapi:OverallResult', ns).text
-    overall_severity = root.find('.//wsapi:OverallSeverity', ns).text
-    message = root.find('.//wsapi:WSAPIResult/wsapi:Message', ns).text
-    result_code = root.find('.//wsapi:WSAPIResult/wsapi:Result', ns).text
-    severity = root.find('.//wsapi:WSAPIResult/wsapi:Severity', ns).text
-
-    # Output extracted data
-    print("Overall Result:", overall_result)
-    print("Overall Severity:", overall_severity)
-    print("Message:", message)
-    print("Result Code:", result_code)
-    print("Severity:", severity)
+    return response.text
 
 
 def getCompany(escaped_token,company_code = "COMP123", short_name = "Tech Corp" ):
@@ -515,10 +487,6 @@ def getCustomer(escaped_token,customer_number = 12345,customer_id = "CUST001",ge
     </soap12:Envelope>
     """
 
-    # Debugging: print the full SOAP request to check the structure
-    print("SOAP Body:")
-    print(soap_body)
-
     # Headers (Note that Token should be a string and passed as plain text)
     headers = {
         'Content-Type': 'application/soap+xml; charset=utf-8',
@@ -528,35 +496,10 @@ def getCustomer(escaped_token,customer_number = 12345,customer_id = "CUST001",ge
 
     # Send the SOAP request using requests.post
     response = requests.post(url, data=soap_body, headers=headers)
+    return response.text
 
-    # Check the response
-    if response.status_code == 200:
-        print("Response Data:", response.text)
-    else:
-        print(f"Error: {response.status_code}")
-        print(f"Response Body: {response.text}")
 
-    # Parse the XML
-    root = ET.fromstring(response.text)
-
-    # Extract data
-    namespace = "{http://www.WSAPI.AMS360.com/v2.0}"
-    overall_result = root.find(".//" + namespace + "OverallResult").text
-    overall_severity = root.find(".//" + namespace + "OverallSeverity").text
-    message = root.find(".//" + namespace + "WSAPIResult/" + namespace + "Message").text
-    result = root.find(".//" + namespace + "WSAPIResult/" + namespace + "Result").text
-    data_name = root.find(".//" + namespace + "WSAPIResult/" + namespace + "DataName").text
-    severity = root.find(".//" + namespace + "WSAPIResult/" + namespace + "Severity").text
-
-    # Print extracted data
-    print("Overall Result:", overall_result)
-    print("Overall Severity:", overall_severity)
-    print("Message:", message)
-    print("Result:", result)
-    print("Data Name:", data_name)
-    print("Severity:", severity)
-
-def getCustomerList(escaped_token,name_prefix = "John",type_of_customer = "Individual",is_brokers_customer = "true",get_related_data = "true",filter_active = "true"   ):
+def getCustomerList(escaped_token,name_prefix = "John",type_of_customer = "Individual",is_brokers_customer = "true",get_related_data = "true",filter_active = "true"):
 
     url = 'https://affwsapi.ams360.com/v2/service.asmx'
     soap_body = f"""<?xml version="1.0" encoding="utf-8"?>
@@ -577,10 +520,6 @@ def getCustomerList(escaped_token,name_prefix = "John",type_of_customer = "Indiv
       </soap12:Body>
     </soap12:Envelope>"""
 
-    # Debugging: print the full SOAP request to check the structure
-    print("SOAP Body:")
-    print(soap_body)
-
     # Headers (Note that Token should be a string and passed as plain text)
     headers = {
         'Content-Type': 'application/soap+xml; charset=utf-8',
@@ -590,32 +529,7 @@ def getCustomerList(escaped_token,name_prefix = "John",type_of_customer = "Indiv
 
     # Send the SOAP request using requests.post
     response = requests.post(url, data=soap_body, headers=headers)
-
-    # Check the response
-    if response.status_code == 200:
-        print("Response Data:", response.text)
-    else:
-        print(f"Error: {response.status_code}")
-        print(f"Response Body: {response.text}")
-
-    # Parse the XML
-    root = ET.fromstring(response.text)
-    # Parse the XML response
-    namespace = {'soap': 'http://www.w3.org/2003/05/soap-envelope', 'ams': 'http://www.WSAPI.AMS360.com/v2.0'}
-
-    # Extract data
-    overall_result = root.find('.//ams:OverallResult', namespace).text
-    overall_severity = root.find('.//ams:OverallSeverity', namespace).text
-    message = root.find('.//ams:WSAPIResult/ams:Message', namespace).text
-    result = root.find('.//ams:WSAPIResult/ams:Result', namespace).text
-    severity = root.find('.//ams:WSAPIResult/ams:Severity', namespace).text
-
-    # Display extracted data
-    print("Overall Result:", overall_result)
-    print("Overall Severity:", overall_severity)
-    print("Message:", message)
-    print("Result:", result)
-    print("Severity:", severity)
+    return response.text
 
 
 def getCustomerProfileAnswer(escaped_token,customer_id = "CUST001",question_id = "QST001" ):
@@ -638,10 +552,6 @@ def getCustomerProfileAnswer(escaped_token,customer_id = "CUST001",question_id =
       </soap12:Body>
     </soap12:Envelope>"""
 
-    # Debugging: print the full SOAP request to check the structure
-    print("SOAP Body:")
-    print(soap_body)
-
     # Headers (Note that Token should be a string and passed as plain text)
     headers = {
         'Content-Type': 'application/soap+xml; charset=utf-8',
@@ -651,43 +561,7 @@ def getCustomerProfileAnswer(escaped_token,customer_id = "CUST001",question_id =
 
     # Send the SOAP request using requests.post
     response = requests.post(url, data=soap_body, headers=headers)
-
-    # Check the response
-    if response.status_code == 200:
-        print("Response Data:", response.text)
-    else:
-        print(f"Error: {response.status_code}")
-        print(f"Response Body: {response.text}")
-
-    # Parse the XML
-    root = ET.fromstring(response.text)
-
-    # Extract OverallResult and OverallSeverity
-    overall_result = root.find(".//{http://www.WSAPI.AMS360.com/v2.0}OverallResult").text
-    overall_severity = root.find(".//{http://www.WSAPI.AMS360.com/v2.0}OverallSeverity").text
-
-    # Extract individual WSAPIResult elements
-    wsapi_results = []
-    for result in root.findall(".//{http://www.WSAPI.AMS360.com/v2.0}WSAPIResult"):
-        message = result.find("{http://www.WSAPI.AMS360.com/v2.0}Message").text
-        result_code = result.find("{http://www.WSAPI.AMS360.com/v2.0}Result").text
-        data_name = result.find("{http://www.WSAPI.AMS360.com/v2.0}DataName").text
-        data_value = result.find("{http://www.WSAPI.AMS360.com/v2.0}DataValue").text
-        severity = result.find("{http://www.WSAPI.AMS360.com/v2.0}Severity").text
-        wsapi_results.append({
-            "Message": message,
-            "Result": result_code,
-            "DataName": data_name,
-            "DataValue": data_value,
-            "Severity": severity
-        })
-
-    # Print extracted data
-    print("Overall Result:", overall_result)
-    print("Overall Severity:", overall_severity)
-    print("WSAPI Results:")
-    for res in wsapi_results:
-        print(res)
+    return response.text
 
 
 def getCustomerProfileAnswerList(escaped_token,customer_id = "CUST001"):
@@ -710,10 +584,6 @@ def getCustomerProfileAnswerList(escaped_token,customer_id = "CUST001"):
       </soap12:Body>
     </soap12:Envelope>"""
 
-    # Debugging: print the full SOAP request to check the structure
-    print("SOAP Body:")
-    print(soap_body)
-
     # Headers (Note that Token should be a string and passed as plain text)
     headers = {
         'Content-Type': 'application/soap+xml; charset=utf-8',
@@ -723,38 +593,7 @@ def getCustomerProfileAnswerList(escaped_token,customer_id = "CUST001"):
 
     # Send the SOAP request using requests.post
     response = requests.post(url, data=soap_body, headers=headers)
-
-    # Check the response
-    if response.status_code == 200:
-        print("Response Data:", response.text)
-    else:
-        print(f"Error: {response.status_code}")
-        print(f"Response Body: {response.text}")
-
-    # Parse the XML
-    root = ET.fromstring(response.text)
-
-    # Define the namespace
-    namespace = {"soap": "http://www.w3.org/2003/05/soap-envelope",
-                 "ns": "http://www.WSAPI.AMS360.com/v2.0"}
-
-    # Extract data
-    overall_result = root.find(".//ns:OverallResult", namespace).text
-    overall_severity = root.find(".//ns:OverallSeverity", namespace).text
-    message = root.find(".//ns:WSAPIResult/ns:Message", namespace).text
-    result_code = root.find(".//ns:WSAPIResult/ns:Result", namespace).text
-    data_name = root.find(".//ns:WSAPIResult/ns:DataName", namespace).text
-    data_value = root.find(".//ns:WSAPIResult/ns:DataValue", namespace).text
-    severity = root.find(".//ns:WSAPIResult/ns:Severity", namespace).text
-
-    # Display extracted values
-    print("Overall Result:", overall_result)
-    print("Overall Severity:", overall_severity)
-    print("Message:", message)
-    print("Result Code:", result_code)
-    print("Data Name:", data_name)
-    print("Data Value:", data_value)
-    print("Severity:", severity)
+    return response.text
 
 
 def getEmployee(escaped_token,employee_code = "EMP001",short_name = "John Doe"):
@@ -777,9 +616,6 @@ def getEmployee(escaped_token,employee_code = "EMP001",short_name = "John Doe"):
       </soap12:Body>
     </soap12:Envelope>
     """
-    # Debugging: print the full SOAP request to check the structure
-    print("SOAP Body:")
-    print(soap_body)
 
     # Headers (Note that Token should be a string and passed as plain text)
     headers = {
@@ -790,35 +626,7 @@ def getEmployee(escaped_token,employee_code = "EMP001",short_name = "John Doe"):
 
     # Send the SOAP request using requests.post
     response = requests.post(url, data=soap_body, headers=headers)
-
-    # Check the response
-    if response.status_code == 200:
-        print("Response Data:", response.text)
-    else:
-        print(f"Error: {response.status_code}")
-        print(f"Response Body: {response.text}")
-
-    # Define the namespace for the XML
-    namespace = {'soap': 'http://www.w3.org/2003/05/soap-envelope',
-                 'wsapi': 'http://www.WSAPI.AMS360.com/v2.0'}
-
-    # Parse the XML response data
-    root = ET.fromstring(response.text)
-    # Extract OverallResult and OverallSeverity
-    overall_result = root.find('.//wsapi:OverallResult', namespace).text
-    overall_severity = root.find('.//wsapi:OverallSeverity', namespace).text
-
-    # Extract the details from the WSAPIResult
-    message = root.find('.//wsapi:WSAPIResult/wsapi:Message', namespace).text
-    result = root.find('.//wsapi:WSAPIResult/wsapi:Result', namespace).text
-    severity = root.find('.//wsapi:WSAPIResult/wsapi:Severity', namespace).text
-
-    # Print the extracted data
-    print(f"Overall Result: {overall_result}")
-    print(f"Overall Severity: {overall_severity}")
-    print(f"Message: {message}")
-    print(f"Result: {result}")
-    print(f"Severity: {severity}")
+    return response.text
 
 
 def getEmployeeList(escaped_token,last_name_prefix = "Jo",emp_type = "FullTime"):
@@ -841,8 +649,8 @@ def getEmployeeList(escaped_token,last_name_prefix = "Jo",emp_type = "FullTime")
     </soap12:Envelope>
     """
     # Debugging: print the full SOAP request to check the structure
-    print("SOAP Body:")
-    print(soap_body)
+    #print("SOAP Body:")
+    #print(soap_body)
 
     # Headers (Note that Token should be a string and passed as plain text)
     headers = {
@@ -853,42 +661,7 @@ def getEmployeeList(escaped_token,last_name_prefix = "Jo",emp_type = "FullTime")
 
     # Send the SOAP request using requests.post
     response = requests.post(url, data=soap_body, headers=headers)
-
-    # Check the response
-    if response.status_code == 200:
-        print("Response Data:", response.text)
-    else:
-        print(f"Error: {response.status_code}")
-        print(f"Response Body: {response.text}")
-
-    # Parse the response XML
-    root = ET.fromstring(response.text)
-
-    # Define the namespace
-    namespace = {'': 'http://www.WSAPI.AMS360.com/v2.0'}
-
-    # Extract data from the response
-    employee_list = root.findall('.//EmployeeList/ListEmployee', namespace)
-
-    # Loop through each employee and extract the details
-    for employee in employee_list:
-        employee_code = employee.find('EmployeeCode', namespace).text
-        last_name = employee.find('LastName', namespace).text
-        first_name = employee.find('FirstName', namespace).text
-        short_name = employee.find('ShortName', namespace).text
-        is_account_exec = employee.find('IsAccountExec', namespace).text
-        is_account_rep = employee.find('IsAccountRep', namespace).text
-        status = employee.find('Status', namespace).text
-
-        # Print extracted data
-        print(f"Employee Code: {employee_code}")
-        print(f"Last Name: {last_name}")
-        print(f"First Name: {first_name}")
-        print(f"Short Name: {short_name}")
-        print(f"Account Exec: {is_account_exec}")
-        print(f"Account Rep: {is_account_rep}")
-        print(f"Status: {status}")
-        print("-" * 30)
+    return response.text
 
 
 def getFieldInfo(escaped_token, entity_name = "Policy",field_name = "EffectiveDate",return_list = "true"):
@@ -911,9 +684,6 @@ def getFieldInfo(escaped_token, entity_name = "Policy",field_name = "EffectiveDa
         </GetFieldInfo_Request>
       </soap12:Body>
     </soap12:Envelope>"""
-    # Debugging: print the full SOAP request to check the structure
-    print("SOAP Body:")
-    print(soap_body)
 
     # Headers (Note that Token should be a string and passed as plain text)
     headers = {
@@ -924,37 +694,7 @@ def getFieldInfo(escaped_token, entity_name = "Policy",field_name = "EffectiveDa
 
     # Send the SOAP request using requests.post
     response = requests.post(url, data=soap_body, headers=headers)
-
-    # Check the response
-    if response.status_code == 200:
-        print("Response Data:", response.text)
-    else:
-        print(f"Error: {response.status_code}")
-        print(f"Response Body: {response.text}")
-
-    # Parse the XML
-    root = ET.fromstring(response.text)
-
-    # Parse the XML data
-    namespace = {'soap': 'http://www.w3.org/2003/05/soap-envelope', 'ns': 'http://www.WSAPI.AMS360.com/v2.0'}
-
-    # Extract values from the response
-    value_list_name = root.find('.//ns:ValueListName', namespace).text
-    value_is_code = root.find('.//ns:ValueIsCode', namespace).text
-    is_dynamic = root.find('.//ns:IsDynamic', namespace).text
-    not_available = root.find('.//ns:NotAvailable', namespace).text
-    field_length = root.find('.//ns:FieldLength', namespace).text
-    list_values_only = root.find('.//ns:ListValuesOnly', namespace).text
-    allowed_values = root.find('.//ns:AllowedValues', namespace).text
-
-    # Output extracted data
-    print("ValueListName:", value_list_name if value_list_name else "None")
-    print("ValueIsCode:", value_is_code)
-    print("IsDynamic:", is_dynamic)
-    print("NotAvailable:", not_available)
-    print("FieldLength:", field_length if field_length else "None")
-    print("ListValuesOnly:", list_values_only)
-    print("AllowedValues:", allowed_values if allowed_values else "None")
+    return response.text
 
 
 def getGLBranch(escaped_token,gl_branch_code = "BR001",short_name = "MainBranch"):
@@ -977,9 +717,6 @@ def getGLBranch(escaped_token,gl_branch_code = "BR001",short_name = "MainBranch"
         </GetGLBranch_Request>
       </soap12:Body>
     </soap12:Envelope>"""
-    # Debugging: print the full SOAP request to check the structure
-    print("SOAP Body:")
-    print(soap_body)
 
     # Headers (Note that Token should be a string and passed as plain text)
     headers = {
@@ -991,32 +728,7 @@ def getGLBranch(escaped_token,gl_branch_code = "BR001",short_name = "MainBranch"
     # Send the SOAP request using requests.post
     response = requests.post(url, data=soap_body, headers=headers)
 
-    # Check the response
-    if response.status_code == 200:
-        print("Response Data:", response.text)
-    else:
-        print(f"Error: {response.status_code}")
-        print(f"Response Body: {response.text}")
-
-    # Parse the XML
-    root = ET.fromstring(response.text)
-
-    # Parse the XML response
-    namespace = {"soap": "http://www.w3.org/2003/05/soap-envelope", "ns": "http://www.WSAPI.AMS360.com/v2.0"}
-
-    # Extract specific elements
-    overall_result = root.find(".//ns:OverallResult", namespace).text
-    overall_severity = root.find(".//ns:OverallSeverity", namespace).text
-    message = root.find(".//ns:WSAPIResult/ns:Message", namespace).text
-    result = root.find(".//ns:WSAPIResult/ns:Result", namespace).text
-    severity = root.find(".//ns:WSAPIResult/ns:Severity", namespace).text
-
-    # Display extracted data
-    print("Overall Result:", overall_result)
-    print("Overall Severity:", overall_severity)
-    print("Message:", message)
-    print("Result:", result)
-    print("Severity:", severity)
+    return response.text
 
 
 def getGLBranchList(escaped_token,name_prefix = "Branch",gl_division_code = "123",filter_active = "true"):
@@ -1038,9 +750,6 @@ def getGLBranchList(escaped_token,name_prefix = "Branch",gl_division_code = "123
         </GetGLBranchList_Request>
       </soap12:Body>
     </soap12:Envelope>"""
-    # Debugging: print the full SOAP request to check the structure
-    print("SOAP Body:")
-    print(soap_body)
 
     # Headers (Note that Token should be a string and passed as plain text)
     headers = {
@@ -1052,34 +761,7 @@ def getGLBranchList(escaped_token,name_prefix = "Branch",gl_division_code = "123
     # Send the SOAP request using requests.post
     response = requests.post(url, data=soap_body, headers=headers)
 
-    # Check the response
-    if response.status_code == 200:
-        print("Response Data:", response.text)
-    else:
-        print(f"Error: {response.status_code}")
-        print(f"Response Body: {response.text}")
-
-    # Parse the XML
-    root = ET.fromstring(response.text)
-    # Parse the response XML
-    namespace = {'soap': 'http://www.w3.org/2003/05/soap-envelope', 'wsapi': 'http://www.WSAPI.AMS360.com/v2.0'}
-
-    # Extract OverallResult and OverallSeverity
-    overall_result = root.find('.//wsapi:OverallResult', namespace).text
-    overall_severity = root.find('.//wsapi:OverallSeverity', namespace).text
-
-    # Extract WSAPIResult details
-    wsapi_result = root.find('.//wsapi:WSAPIResult', namespace)
-    message = wsapi_result.find('wsapi:Message', namespace).text
-    result = wsapi_result.find('wsapi:Result', namespace).text
-    severity = wsapi_result.find('wsapi:Severity', namespace).text
-
-    # Print extracted data
-    print("OverallResult:", overall_result)
-    print("OverallSeverity:", overall_severity)
-    print("Message:", message)
-    print("Result:", result)
-    print("Severity:", severity)
+    return response.text
 
 
 def getGLDepartment(escaped_token,gl_department_code = "FIN001",short_name = "Finance"):
@@ -1102,9 +784,6 @@ def getGLDepartment(escaped_token,gl_department_code = "FIN001",short_name = "Fi
       </soap12:Body>
     </soap12:Envelope>
     """
-    # Debugging: print the full SOAP request to check the structure
-    print("SOAP Body:")
-    print(soap_body)
 
     # Headers (Note that Token should be a string and passed as plain text)
     headers = {
@@ -1116,33 +795,7 @@ def getGLDepartment(escaped_token,gl_department_code = "FIN001",short_name = "Fi
     # Send the SOAP request using requests.post
     response = requests.post(url, data=soap_body, headers=headers)
 
-    # Check the response
-    if response.status_code == 200:
-        print("Response Data:", response.text)
-    else:
-        print(f"Error: {response.status_code}")
-        print(f"Response Body: {response.text}")
-
-    # Parse the XML
-    root = ET.fromstring(response.text)
-
-    # Parse the XML
-    namespace = {'soap': 'http://www.w3.org/2003/05/soap-envelope',
-                 'ns': 'http://www.WSAPI.AMS360.com/v2.0'}
-
-    # Extract data
-    overall_result = root.find(".//ns:OverallResult", namespace).text
-    overall_severity = root.find(".//ns:OverallSeverity", namespace).text
-    message = root.find(".//ns:WSAPIResult/ns:Message", namespace).text
-    result = root.find(".//ns:WSAPIResult/ns:Result", namespace).text
-    severity = root.find(".//ns:WSAPIResult/ns:Severity", namespace).text
-
-    # Print extracted data
-    print(f"Overall Result: {overall_result}")
-    print(f"Overall Severity: {overall_severity}")
-    print(f"Message: {message}")
-    print(f"Result: {result}")
-    print(f"Severity: {severity}")
+    return response.text
 
 
 def getGLDepartmentList(escaped_token,name_prefix = "HR",gl_branch_code = "BRANCH001",filter_active = "true"):
@@ -1165,9 +818,6 @@ def getGLDepartmentList(escaped_token,name_prefix = "HR",gl_branch_code = "BRANC
         </GetGLDepartmentList_Request>
       </soap12:Body>
     </soap12:Envelope>"""
-    # Debugging: print the full SOAP request to check the structure
-    print("SOAP Body:")
-    print(soap_body)
 
     # Headers (Note that Token should be a string and passed as plain text)
     headers = {
@@ -1179,32 +829,7 @@ def getGLDepartmentList(escaped_token,name_prefix = "HR",gl_branch_code = "BRANC
     # Send the SOAP request using requests.post
     response = requests.post(url, data=soap_body, headers=headers)
 
-    # Check the response
-    if response.status_code == 200:
-        print("Response Data:", response.text)
-    else:
-        print(f"Error: {response.status_code}")
-        print(f"Response Body: {response.text}")
-
-    # Parse the XML
-    root = ET.fromstring(response.text)
-
-    # Parse the XML
-    namespace = {'soap': 'http://www.w3.org/2003/05/soap-envelope', 'ns': 'http://www.WSAPI.AMS360.com/v2.0'}
-
-    # Extract values
-    overall_result = root.find(".//ns:OverallResult", namespace).text
-    overall_severity = root.find(".//ns:OverallSeverity", namespace).text
-    message = root.find(".//ns:WSAPIResult/ns:Message", namespace).text
-    result = root.find(".//ns:WSAPIResult/ns:Result", namespace).text
-    severity = root.find(".//ns:WSAPIResult/ns:Severity", namespace).text
-
-    # Output the extracted values
-    print("Overall Result:", overall_result)
-    print("Overall Severity:", overall_severity)
-    print("Message:", message)
-    print("Result:", result)
-    print("Severity:", severity)
+    return response.text
 
 
 def getGLDivision(escaped_token,gl_division_code = "DIV12345",short_name = "MainDivision"):
@@ -1226,9 +851,6 @@ def getGLDivision(escaped_token,gl_division_code = "DIV12345",short_name = "Main
         </GetGLDivision_Request>
       </soap12:Body>
     </soap12:Envelope>"""
-    # Debugging: print the full SOAP request to check the structure
-    print("SOAP Body:")
-    print(soap_body)
 
     # Headers (Note that Token should be a string and passed as plain text)
     headers = {
@@ -1239,44 +861,7 @@ def getGLDivision(escaped_token,gl_division_code = "DIV12345",short_name = "Main
 
     # Send the SOAP request using requests.post
     response = requests.post(url, data=soap_body, headers=headers)
-
-    # Check the response
-    if response.status_code == 200:
-        print("Response Data:", response.text)
-    else:
-        print(f"Error: {response.status_code}")
-        print(f"Response Body: {response.text}")
-
-    # Parse the XML
-    root = ET.fromstring(response.text)
-
-    # Parse the XML response
-    namespace = {"soap": "http://www.w3.org/2003/05/soap-envelope", "wsapi": "http://www.WSAPI.AMS360.com/v2.0"}
-
-    # Extract values
-    overall_result = root.find(".//wsapi:OverallResult", namespace).text
-    overall_severity = root.find(".//wsapi:OverallSeverity", namespace).text
-
-    results = []
-    for result in root.findall(".//wsapi:WSAPIResult", namespace):
-        message = result.find("wsapi:Message", namespace).text
-        result_code = result.find("wsapi:Result", namespace).text
-        severity = result.find("wsapi:Severity", namespace).text
-
-        results.append({
-            "Message": message,
-            "Result": result_code,
-            "Severity": severity
-        })
-
-    # Display extracted data
-    extracted_data = {
-        "OverallResult": overall_result,
-        "OverallSeverity": overall_severity,
-        "Results": results
-    }
-
-    print(extracted_data)
+    return response.text
 
 
 def getGLDivisionList(escaped_token,name_prefix = "Finance",filter_active = "true"):
@@ -1299,10 +884,6 @@ def getGLDivisionList(escaped_token,name_prefix = "Finance",filter_active = "tru
       </soap12:Body>
     </soap12:Envelope>"""
 
-    # Debugging: print the full SOAP request to check the structure
-    print("SOAP Body:")
-    print(soap_body)
-
     # Headers (Note that Token should be a string and passed as plain text)
     headers = {
         'Content-Type': 'application/soap+xml; charset=utf-8',
@@ -1312,33 +893,7 @@ def getGLDivisionList(escaped_token,name_prefix = "Finance",filter_active = "tru
 
     # Send the SOAP request using requests.post
     response = requests.post(url, data=soap_body, headers=headers)
-
-    # Check the response
-    if response.status_code == 200:
-        print("Response Data:", response.text)
-    else:
-        print(f"Error: {response.status_code}")
-        print(f"Response Body: {response.text}")
-
-    # Parse the XML
-    root = ET.fromstring(response.text)
-
-    # Parse the XML response
-    namespace = {"soap": "http://www.w3.org/2003/05/soap-envelope", "ns": "http://www.WSAPI.AMS360.com/v2.0"}
-
-    # Extracting values
-    overall_result = root.find(".//ns:OverallResult", namespace).text
-    overall_severity = root.find(".//ns:OverallSeverity", namespace).text
-    message = root.find(".//ns:WSAPIResult/ns:Message", namespace).text
-    result = root.find(".//ns:WSAPIResult/ns:Result", namespace).text
-    severity = root.find(".//ns:WSAPIResult/ns:Severity", namespace).text
-
-    # Print extracted values
-    print(f"Overall Result: {overall_result}")
-    print(f"Overall Severity: {overall_severity}")
-    print(f"Message: {message}")
-    print(f"Result: {result}")
-    print(f"Severity: {severity}")
+    return response.text
 
 
 def getGLGroup(escaped_token,gl_group_code = "GLGroup123",short_name = "FinanceGroup"):
@@ -1488,10 +1043,6 @@ def getPolicy(escaped_token,policy_id = "1234",transaction_effective_date = "202
     </soap12:Envelope>
     """
 
-    # Debugging: print the full SOAP request to check the structure
-    print("SOAP Body:")
-    print(soap_body)
-
     # Headers (Note that Token should be a string and passed as plain text)
     headers = {
         'Content-Type': 'application/soap+xml; charset=utf-8',
@@ -1501,66 +1052,44 @@ def getPolicy(escaped_token,policy_id = "1234",transaction_effective_date = "202
 
     # Send the SOAP request using requests.post
     response = requests.post(url, data=soap_body, headers=headers)
-
-    # Check the response
-    if response.status_code == 200:
-        print("Response Data:", response.text)
-        return response
-    else:
-        print(f"Error: {response.status_code}")
-        print(f"Response Body: {response.text}")
+    return response.text
 
 
-def getPolicyList(escaped_token,customer_id = "12345",policy_status = "Active",get_related_data = "true",filter_multi_entity = "false",filter_accounting_subtype = "false",
+def getPolicyList(escaped_token,customer_number = "12345",policy_status = "Active",get_related_data = "true",filter_multi_entity = "false",filter_accounting_subtype = "false",
                   filter_submission_subtype = "false",filter_policy_subtype = "false"):
-    url = 'https://affwsapi.ams360.com/v2/service.asmx'
-    # SOAP Request Body
-    soap_body = f"""<?xml version="1.0" encoding="utf-8"?>
-    <soap12:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap12="http://www.w3.org/2003/05/soap-envelope">
-      <soap12:Header>
-        <WSAPIAuthToken xmlns="http://www.WSAPI.AMS360.com/v2.0">
-          <Token>{escaped_token}</Token>
-        </WSAPIAuthToken>
-      </soap12:Header>
-      <soap12:Body>
-        <GetPolicyList_Request xmlns="http://www.WSAPI.AMS360.com/v2.0">
-          <ByCustomerId>
-            <CustomerId>{customer_id}</CustomerId>
-            <PolicyStatus>{policy_status}</PolicyStatus>
-            <GetRelatedData>{get_related_data}</GetRelatedData>
-            <FilterMultiEntity>{filter_multi_entity}</FilterMultiEntity>
-            <FilterAccountingSubType>{filter_accounting_subtype}</FilterAccountingSubType>
-            <FilterSubmissionSubType>{filter_submission_subtype}</FilterSubmissionSubType>
-            <FilterPolicySubType>{filter_policy_subtype}</FilterPolicySubType>
-          </ByCustomerId>
-        </GetPolicyList_Request>
-      </soap12:Body>
-    </soap12:Envelope>"""
+    BASE_URL = "https://wsapi.ams360.com/v3/WSAPIService.svc"
 
-    # Request headers
+    def send_soap_request(session_token: str, action: str, body: str) -> ET.Element:
+        soap_envelope = f"""<?xml version="1.0" encoding="utf-8"?>
+        <s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
+            <s:Header>
+                <h:WSAPISession xmlns:h="http://www.WSAPI.AMS360.com/v3.0" xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+                    <h:Ticket>{session_token}</h:Ticket>
+                </h:WSAPISession>
+            </s:Header>
+            <s:Body>
+                {body}
+            </s:Body>
+        </s:Envelope>
+        """
 
-    # Debugging: print the full SOAP request to check the structure
-    print("SOAP Body:")
-    print(soap_body)
+        headers = {
+            'Content-Type': 'text/xml; charset=utf-8',
+            'SOAPAction': f'http://www.WSAPI.AMS360.com/v3.0/WSAPIServiceContract/{action}'
+        }
 
-    # Headers (Note that Token should be a string and passed as plain text)
-    headers = {
-        'Content-Type': 'application/soap+xml; charset=utf-8',
-        'SOAPAction': 'http://www.WSAPI.AMS360.com/v2.0/GetPolicyList',
-        'Authorization': f"Bearer {escaped_token}"  # Use Authorization header for the token
-    }
-
-    # Send the SOAP request using requests.post
-    response = requests.post(url, data=soap_body, headers=headers)
-
-    # Check the response
-    if response.status_code == 200:
-        print("Response Data:", response.text)
-        return response
-
-    else:
-        print(f"Error: {response.status_code}")
-        print(f"Response Body: {response.text}")
+        response = requests.post(BASE_URL, data=soap_envelope, headers=headers)
+        return response.text
+    
+    body = f"""
+    <PolicyGetListByCustomerNumber xmlns="http://www.WSAPI.AMS360.com/v3.0">
+        <Request xmlns:d4p1="http://www.WSAPI.AMS360.com/v3.0/DataContract" xmlns:i="http://www.w3.org/2001/XMLSchema-instance">
+            <d4p1:CustomerNumber>{customer_number}</d4p1:CustomerNumber>
+        </Request>
+    </PolicyGetListByCustomerNumber>
+        """
+    root = send_soap_request(escaped_token, "PolicyGetListByCustomerNumber", body)
+    return root
 
 
 def getLineOfBusiness(escaped_token,line_of_business_code = "CommercialProperty"):
@@ -1728,48 +1257,6 @@ def getPlanTypeList(escaped_token,company_code = "ABCInsuranceCo",filter_active 
         print(f"Response Body: {response.text}")
 
 
-def getPolicyList(escaped_token,policy_id = "Policy12345",transaction_effective_date = "2024-05-15",get_related_data = "false"):
-    url = 'https://affwsapi.ams360.com/v2/service.asmx'
-
-    # SOAP Request Body
-    soap_body = f"""<?xml version="1.0" encoding="utf-8"?>
-    <soap12:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap12="http://www.w3.org/2003/05/soap-envelope">
-      <soap12:Header>
-        <WSAPIAuthToken xmlns="http://www.WSAPI.AMS360.com/v2.0">
-          <Token>{escaped_token}</Token>
-        </WSAPIAuthToken>
-      </soap12:Header>
-      <soap12:Body>
-        <GetPolicy_Request xmlns="http://www.WSAPI.AMS360.com/v2.0">
-          <PolicyId>{policy_id}</PolicyId>
-          <TransactionEffectiveDate>{transaction_effective_date}</TransactionEffectiveDate>
-          <GetRelatedData>{get_related_data}</GetRelatedData>
-        </GetPolicy_Request>
-      </soap12:Body>
-    </soap12:Envelope>"""
-    # Debugging: print the full SOAP request to check the structure
-    print("SOAP Body:")
-    print(soap_body)
-
-    # Headers (Note that Token should be a string and passed as plain text)
-    headers = {
-        'Content-Type': 'application/soap+xml; charset=utf-8',
-        'SOAPAction': 'http://www.WSAPI.AMS360.com/v2.0/GetPolicyList',
-        'Authorization': f"Bearer {escaped_token}"  # Use Authorization header for the token
-    }
-
-    # Send the SOAP request using requests.post
-    response = requests.post(url, data=soap_body, headers=headers)
-
-    # Check the response
-    if response.status_code == 200:
-        print("Response Data:", response.text)
-        return response.text
-    else:
-        print(f"Error: {response.status_code}")
-        print(f"Response Body: {response.text}")
-
-
 def getPPAPolicyDetail(escaped_token,policy_id = "123456",transaction_effective_date = "2024-05-15",get_related_data = "false"):
     # Construct the SOAP request body
     soap_body = f"""<?xml version="1.0" encoding="utf-8"?>
@@ -1788,10 +1275,6 @@ def getPPAPolicyDetail(escaped_token,policy_id = "123456",transaction_effective_
       </soap12:Body>
     </soap12:Envelope>"""
 
-    # Debugging: print the full SOAP request to check the structure
-    print("SOAP Body:")
-    print(soap_body)
-
     # Headers (Note that Token should be a string and passed as plain text)
     headers = {
         'Content-Type': 'application/soap+xml; charset=utf-8',
@@ -1801,14 +1284,7 @@ def getPPAPolicyDetail(escaped_token,policy_id = "123456",transaction_effective_
 
     # Send the SOAP request using requests.post
     response = requests.post(url, data=soap_body, headers=headers)
-
-    # Check the response
-    if response.status_code == 200:
-        print("Response Data:", response.text)
-        return response.text
-    else:
-        print(f"Error: {response.status_code}")
-        print(f"Response Body: {response.text}")
+    return response.text
 
 
 def getPolicyTransactionPremium(auth_token,policy_transaction_premium_id = "Premium12345"):
@@ -2388,139 +1864,6 @@ def insertNote(auth_token, note_data):
             print("Response:", response.text)
 
 
-def insertPolicy(auth_token, policy_details):
-        """
-        Sends a SOAP request to insert a policy.
-
-        Parameters:
-            auth_token (str): Bearer token for authorization.
-            policy_details (dict): Dictionary containing policy data, personnel, and business lines.
-
-        Returns:
-            Response: Response object from the server.
-        """
-        # Extract policy, personnel, and business lines from details
-        policy = policy_details.get("Policy", {})
-        additional_personnel = policy_details.get("AdditionalPersonnel", [])
-        line_of_business = policy_details.get("LineOfBusiness", [])
-        transaction_data = policy_details.get("TransactionData", {})
-
-        # Construct SOAP body
-        soap_body = f"""<?xml version="1.0" encoding="utf-8"?>
-        <soap12:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.W3.org/2001/XMLSchema" xmlns:soap12="http://www.w3.org/2003/05/soap-envelope">
-          <soap12:Header>
-            <WSAPIAuthToken xmlns="http://www.WSAPI.AMS360.com/v2.0">
-              <Token>{auth_token}</Token>
-            </WSAPIAuthToken>
-          </soap12:Header>
-          <soap12:Body>
-            <InsertPolicy_Request xmlns="http://www.WSAPI.AMS360.com/v2.0">
-              <Policy>
-                {"".join(f"<{key}>{value}</{key}>" for key, value in policy.items())}
-              </Policy>
-              <AdditionalPersonnel>
-                {"".join(
-            f"""<PolicyPersonnel>
-                         <EmployeeCode>{personnel["EmployeeCode"]}</EmployeeCode>
-                         <EmployeeType>{personnel["EmployeeType"]}</EmployeeType>
-                         <IsPrimary>{str(personnel["IsPrimary"]).lower()}</IsPrimary>
-                       </PolicyPersonnel>"""
-            for personnel in additional_personnel
-        )}
-              </AdditionalPersonnel>
-              <LineOfBusiness>
-                {"".join(
-            f"""<PolicyLineOfBusiness>
-                         <DriverList>
-                           {"".join("<Driver xsi:nil='true' />" for _ in range(2))}
-                         </DriverList>
-                         <VehicleList>
-                           {"".join("<Vehicle xsi:nil='true' />" for _ in range(2))}
-                         </VehicleList>
-                         <UsageList>
-                           {"".join("<Usage xsi:nil='true' />" for _ in range(2))}
-                         </UsageList>
-                         <LineOfBusinessId>{lob["LineOfBusinessId"]}</LineOfBusinessId>
-                         <LineOfBusiness>{lob["LineOfBusiness"]}</LineOfBusiness>
-                         <SortOrderNumber>{lob["SortOrderNumber"]}</SortOrderNumber>
-                         <Action>{lob["Action"]}</Action>
-                       </PolicyLineOfBusiness>"""
-            for lob in line_of_business
-        )}
-              </LineOfBusiness>
-              {"".join(f"<{key}>{value}</{key}>" for key, value in transaction_data.items())}
-            </InsertPolicy_Request>
-          </soap12:Body>
-        </soap12:Envelope>
-        """
-
-        # Set headers
-        headers = {
-            "Content-Type": "application/soap+xml; charset=utf-8",
-            "SOAPAction": "http://www.WSAPI.AMS360.com/v2.0/InsertPolicy",
-            "Authorization": f"Bearer {auth_token}",
-        }
-
-        # URL for SOAP service
-        url = "https://affwsapi.ams360.com/v2/service.asmx"
-
-        # Send POST request
-        response = requests.post(url, data=soap_body, headers=headers)
-
-        # Check the response
-        if response.status_code == 200:
-            print("Response Data:", response.text)
-            return response.text
-        else:
-            print(f"Error: {response.status_code}")
-            print(f"Response Body: {response.text}")
-
-
-# Sample data like this insert_policy
-policy_details = {
-        "Policy": {
-            "CustomerId": "CUST12345",
-            "PolicyId": "POL12345",
-            "PolicyNumber": "PN12345",
-            "TypeOfBusiness": "10",
-            "PolicyType": "Auto",
-            "PolicyTypeOfBusiness": "Personal",
-            "WritingCompanyCode": "WC12345",
-            "AccountExecCode": "AE123",
-            "AccountRepCode": "AR123",
-            "BrokerCode": "BR123",
-            "PolicyEffectiveDate": "2024-01-01",
-            "PolicyExpirationDate": "2025-01-01",
-            "IsContinuous": "false",
-            "PolicyStatus": "Active",
-            "BillMethod": "Direct",
-            "FullTermPremium": "1000.00",
-        },
-        "AdditionalPersonnel": [
-            {"EmployeeCode": "E123", "EmployeeType": "Manager", "IsPrimary": True},
-            {"EmployeeCode": "E456", "EmployeeType": "Assistant", "IsPrimary": False},
-        ],
-        "LineOfBusiness": [
-            {
-                "LineOfBusinessId": "LOB123",
-                "LineOfBusiness": "Auto",
-                "SortOrderNumber": "1",
-                "Action": "Add",
-            },
-            {
-                "LineOfBusinessId": "LOB456",
-                "LineOfBusiness": "Home",
-                "SortOrderNumber": "2",
-                "Action": "Update",
-            },
-        ],
-        "TransactionData": {
-            "TransactionType": "New",
-            "TransactionReasonCode": "Reason123",
-            "TransactionDescription": "Adding new policy",
-        },
-    }
-
 def insert_policy_transaction_fee(auth_token, transaction_fee_details):
     """
     Sends a SOAP request to insert a policy transaction fee.
@@ -2806,7 +2149,6 @@ transaction_premium_details = {
     "Reconciled": "No",
 }
 
-import requests
 
 def insert_policy_transaction_premiums(auth_token, policy_id, premium_list):
     """
@@ -2934,8 +2276,6 @@ premium_list = [
     },
 ]
 
-
-import requests
 
 def insert_receipt(auth_token, receipt_data, insured_accounts, direct_bill_deposits):
     """
@@ -3699,7 +3039,7 @@ def search_by_phone_number(auth_token, phone_number):
         print(f"Request Failed with Status Code: {response.status_code}")
         print(response.text)
 
-import base64
+
 def send_file_chunk(auth_token, file_chunk_id, doc_stage_id, file_data, sequence_number):
     """
     Sends a SOAP request to upload a file chunk.
@@ -3766,7 +3106,6 @@ doc_stage_id = "stage456"
 file_data = b"This is a sample file data"  # Replace with actual file content
 sequence_number = 1
 
-import requests
 
 def update_al3_policy(auth_token, policy_data):
     """
@@ -4084,176 +3423,6 @@ def update_customer_profile_answer(auth_token, answer_text, customer_id, questio
 answer_text = "The customer prefers email communication."
 customer_id = "CUST-001"
 question_id = "QID-123"
-
-
-def update_policy(auth_token, policy_details, line_of_business, transaction_details):
-    """
-    Sends a SOAP request to update a policy.
-
-    Parameters:
-        auth_token (str): The authorization token for the API.
-        policy_details (dict): A dictionary containing the policy details.
-        line_of_business (list): A list of line of business information.
-        transaction_details (dict): A dictionary containing transaction details.
-
-    Returns:
-        Response: The response from the SOAP API.
-    """
-    # SOAP Request Body
-    soap_body = f"""<?xml version="1.0" encoding="utf-8"?>
-    <soap12:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap12="http://www.w3.org/2003/05/soap-envelope">
-      <soap12:Header>
-        <WSAPIAuthToken xmlns="http://www.WSAPI.AMS360.com/v2.0">
-          <Token>{auth_token}</Token>
-        </WSAPIAuthToken>
-      </soap12:Header>
-      <soap12:Body>
-        <UpdatePolicy_Request xmlns="http://www.WSAPI.AMS360.com/v2.0">
-          <Policy>
-            <CustomerId>{policy_details["CustomerId"]}</CustomerId>
-            <PolicyId>{policy_details["PolicyId"]}</PolicyId>
-            <PolicyNumber>{policy_details["PolicyNumber"]}</PolicyNumber>
-            <TypeOfBusiness>{policy_details["TypeOfBusiness"]}</TypeOfBusiness>
-            <PolicyType>{policy_details["PolicyType"]}</PolicyType>
-            <PolicyTypeOfBusiness>{policy_details["PolicyTypeOfBusiness"]}</PolicyTypeOfBusiness>
-            <WritingCompanyCode>{policy_details["WritingCompanyCode"]}</WritingCompanyCode>
-            <AccountExecCode>{policy_details["AccountExecCode"]}</AccountExecCode>
-            <AccountRepCode>{policy_details["AccountRepCode"]}</AccountRepCode>
-            <BrokerCode>{policy_details["BrokerCode"]}</BrokerCode>
-            <PolicyEffectiveDate>{policy_details["PolicyEffectiveDate"]}</PolicyEffectiveDate>
-            <PolicyExpirationDate>{policy_details["PolicyExpirationDate"]}</PolicyExpirationDate>
-            <IsContinuous>{policy_details["IsContinuous"]}</IsContinuous>
-            <PolicyStatus>{policy_details["PolicyStatus"]}</PolicyStatus>
-            <GLDivisionCode>{policy_details["GLDivisionCode"]}</GLDivisionCode>
-            <GLDepartmentCode>{policy_details["GLDepartmentCode"]}</GLDepartmentCode>
-            <GLBranchCode>{policy_details["GLBranchCode"]}</GLBranchCode>
-            <GLGroupCode>{policy_details["GLGroupCode"]}</GLGroupCode>
-            <BillMethod>{policy_details["BillMethod"]}</BillMethod>
-            <IsNewPolicy>{policy_details["IsNewPolicy"]}</IsNewPolicy>
-            <FullTermPremium>{policy_details["FullTermPremium"]}</FullTermPremium>
-            <IsFinanced>{policy_details["IsFinanced"]}</IsFinanced>
-            <CompanyType>{policy_details["CompanyType"]}</CompanyType>
-            <IsMultiEntity>{policy_details["IsMultiEntity"]}</IsMultiEntity>
-            <PolicySubType>{policy_details["PolicySubType"]}</PolicySubType>
-            <DescriptionBPol>{policy_details["DescriptionBPol"]}</DescriptionBPol>
-            <BusinessOrigin>{policy_details["BusinessOrigin"]}</BusinessOrigin>
-            <ParentCompanyCode>{policy_details["ParentCompanyCode"]}</ParentCompanyCode>
-            <Notation>{policy_details["Notation"]}</Notation>
-            <PaymentPlan>{policy_details["PaymentPlan"]}</PaymentPlan>
-            <RenewalList>{policy_details["RenewalList"]}</RenewalList>
-            <CustomerNotation>{policy_details["CustomerNotation"]}</CustomerNotation>
-          </Policy>
-          <LineOfBusiness>
-            {"".join([f"""
-            <PolicyLineOfBusiness>
-              <DriverList>
-                <Driver xsi:nil="true" />
-                <Driver xsi:nil="true" />
-              </DriverList>
-              <VehicleList>
-                <Vehicle xsi:nil="true" />
-                <Vehicle xsi:nil="true" />
-              </VehicleList>
-              <UsageList>
-                <Usage xsi:nil="true" />
-                <Usage xsi:nil="true" />
-              </UsageList>
-              <LineOfBusinessId>{line_of_business["LineOfBusinessId"]}</LineOfBusinessId>
-              <LineOfBusiness>{line_of_business["LineOfBusiness"]}</LineOfBusiness>
-              <SortOrderNumber>{line_of_business["SortOrderNumber"]}</SortOrderNumber>
-              <Action>{line_of_business["Action"]}</Action>
-            </PolicyLineOfBusiness>
-            """ for line_of_business in line_of_business])}
-          </LineOfBusiness>
-          <TransactionType>{transaction_details["TransactionType"]}</TransactionType>
-          <TransactionEffectiveDate>{transaction_details["TransactionEffectiveDate"]}</TransactionEffectiveDate>
-          <IsCorrection>{transaction_details["IsCorrection"]}</IsCorrection>
-          <TransactionReasonCode>{transaction_details["TransactionReasonCode"]}</TransactionReasonCode>
-          <TransactionDescription>{transaction_details["TransactionDescription"]}</TransactionDescription>
-        </UpdatePolicy_Request>
-      </soap12:Body>
-    </soap12:Envelope>
-    """
-
-    # Set headers with Authorization
-    headers = {
-        "Content-Type": "application/soap+xml; charset=utf-8",
-        "SOAPAction": "http://www.WSAPI.AMS360.com/v2.0/UpdatePolicy",
-        "Authorization": f"Bearer {auth_token}",  # Assuming Bearer token for Authorization
-    }
-
-    # Define the endpoint URL
-    url = "https://affwsapi.ams360.com/v2/service.asmx"
-
-    # Make the POST request
-    response = requests.post(url, data=soap_body, headers=headers)
-
-    # Output the response
-    if response.status_code == 200:
-        print("Request was successful!")
-        print(response.text)
-        return response.text
-    else:
-        print(f"Request failed with status code: {response.status_code}")
-        print(response.text)
-
-# Example usage
-
-policy_details = {
-    "CustomerId": "CUST-001",
-    "PolicyId": "POL-001",
-    "PolicyNumber": "12345",
-    "TypeOfBusiness": "1",
-    "PolicyType": "General",
-    "PolicyTypeOfBusiness": "Commercial",
-    "WritingCompanyCode": "WC01",
-    "AccountExecCode": "AE123",
-    "AccountRepCode": "AR123",
-    "BrokerCode": "BC123",
-    "PolicyEffectiveDate": "2024-01-01",
-    "PolicyExpirationDate": "2025-01-01",
-    "IsContinuous": "true",
-    "PolicyStatus": "Active",
-    "GLDivisionCode": "D1",
-    "GLDepartmentCode": "D2",
-    "GLBranchCode": "B1",
-    "GLGroupCode": "G1",
-    "BillMethod": "Monthly",
-    "IsNewPolicy": "true",
-    "FullTermPremium": "1000.00",
-    "IsFinanced": "false",
-    "CompanyType": "Private",
-    "IsMultiEntity": "false",
-    "PolicySubType": "Basic",
-    "DescriptionBPol": "Standard Policy",
-    "BusinessOrigin": "Referral",
-    "ParentCompanyCode": "PC01",
-    "Notation": "Policy created.",
-    "PaymentPlan": "Monthly",
-    "RenewalList": "Renew",
-    "CustomerNotation": "Special terms."
-}
-line_of_business = [
-    {
-        "LineOfBusinessId": "LOB-001",
-        "LineOfBusiness": "Auto",
-        "SortOrderNumber": "1",
-        "Action": "Add"
-    },
-    {
-        "LineOfBusinessId": "LOB-002",
-        "LineOfBusiness": "Home",
-        "SortOrderNumber": "2",
-        "Action": "Add"
-    }
-]
-transaction_details = {
-    "TransactionType": "New",
-    "TransactionEffectiveDate": "2024-01-01",
-    "IsCorrection": "false",
-    "TransactionReasonCode": "TR001",
-    "TransactionDescription": "New Policy creation"
-}
 
 
 def update_policy_transaction_premium(auth_token, policy_transaction_details):
@@ -4902,8 +4071,6 @@ def delete_policy_transaction_premium(auth_token, policy_transaction_premium_id,
         print(response.text)
 
 
-from datetime import datetime
-
 def delete_remark(auth_token, remark_id, policy_id, line_of_business_id, remark_type, transaction_effective_date,
                   parent_id, username, password):
     url = "https://affwsapi.ams360.com/v2/service.asmx"
@@ -5449,14 +4616,13 @@ def get_attachment_end(auth_token, doc_a_id, doc_stage_id, username, password):
         print(response.text)
 
 
-
-
-
-
-
-
-
-
-
+def call_facade(function_name, **kwargs):
+    result = function_name(escaped_token, **kwargs)
+    try: 
+        parsed_result = xmltodict.parse(result)
+        return parsed_result
+    except: 
+        pass #pprint(result)
+    return {}
 
 

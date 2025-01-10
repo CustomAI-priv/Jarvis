@@ -11,7 +11,9 @@ import fitz
 import dropbox
 import bs4
 import base64
+from time import perf_counter
 import tabula
+from abc import ABC, abstractmethod, ABCMeta
 from functools import partial
 from tqdm import tqdm
 from typing import Any, Annotated, Callable, Dict, List, Sequence, TypedDict, ClassVar, Union
@@ -26,14 +28,14 @@ from collections import OrderedDict
 from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, validator
 from langchain_core.pydantic_v1 import BaseModel as LangchainBaseModel, Field as LangchainField
 from dropbox.files import ListFolderResult, DeletedMetadata, FileMetadata
 from sentence_transformers import SentenceTransformer
 
 import chromadb
 from chromadb.config import Settings as ChromaSettings
-import whisper 
+import whisper
 
 from langchain import hub
 from langchain.prompts import PromptTemplate
@@ -72,21 +74,20 @@ from flashrank import Ranker, RerankRequest
 import cohere
 
 # import lancedb libraries and dependencies
-#import lance
 import lancedb
 from lancedb.embeddings import get_registry, EmbeddingFunctionRegistry
 from lancedb.pydantic import LanceModel, Vector
 from lancedb.rerankers import LinearCombinationReranker
-
-# from chat_history_management import ChatHistoryManagement
-# from setup import DocumentsSchema, DataLoader, api_key, co, RAG_colbert_downloaded, azure_api_key, azure_endpoint
-# from setup import ColPaliLoader, ColPaliInference # colpali imports 
+import sys
+try:
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+except:
+    pass
 try:
     from backend.setup import DocumentsSchema, DataLoader, api_key, co, RAG_colbert_downloaded, azure_api_key, azure_endpoint
-    from backend.setup import ColPaliLoader, ColPaliInference # colpali imports 
+    from backend.setup import ColPaliLoader, ColPaliInference # colpali imports
     from backend.chat_history_management import ChatHistoryManagement
 except:
-    print("using alternate import path")
     try:
         from setup import DocumentsSchema, DataLoader, api_key, co, RAG_colbert_downloaded, azure_api_key, azure_endpoint
         from setup import ColPaliLoader, ColPaliInference # colpali imports
@@ -95,6 +96,13 @@ except:
         print(f"An error occurred while importing setup: {e}")
 from langchain.callbacks.base import BaseCallbackHandler
 import requests
+
+
+@lru_cache(maxsize=1)
+def get_data_loader():
+    """Cached data loader initialization"""
+    data_loader = DataLoader()
+    return data_loader
 
 
 class MyStreamHandler(BaseCallbackHandler):
@@ -131,7 +139,7 @@ class ModelSpecifications(BaseModel):
     Provide only the generated queries, one per line, without any numbering, explanations, or additional text.
     """
 
-    model_id: str = 'gpt-4o'
+    model_id: str = 'gpt-4o' # gpt-4o-mini
     model_deployment_name: str = 'jarvis_llm'
     private_llm_mode: bool = True
     temperature: float = 0
@@ -165,6 +173,20 @@ class ModelSpecifications(BaseModel):
               """
     chat_memory_threshold: int = 50
 
+    # define the generation type for the citations
+    # Options include {'multimodal', 'langchain'}
+    citation_generation_type: str = Field(
+        default='multimodal',
+        description="Type of citation generation to use. Must be either 'multimodal' or 'langchain'."
+    )
+
+    @validator('citation_generation_type')
+    def validate_citation_type(cls, v):
+        allowed_values = {'multimodal', 'langchain'}
+        if v not in allowed_values:
+            raise ValueError(f'citation_generation_type must be one of {allowed_values}')
+        return v
+
     # New concatenation prompt added as a string
     concatenate_template: str = """You are an AI assistant tasked with consolidating multiple responses that originate from different chunks of the same spreadsheet into a single, coherent answer.
 
@@ -182,6 +204,50 @@ class ModelSpecifications(BaseModel):
 
     Combined Answer:
     """
+
+    multimodal_rag_template_debugging: str = """You are an expert research assistant that knows technical topics. Here is the question: {question}. Answer is clearly and concisely."""
+    # multimodal retrieval-augmented generation template
+    multimodal_rag_template: str = """You are an expert research assistant specializing in various technical topics. Your goal is to provide detailed, accurate analysis by carefully reasoning about both textual and visual information.
+
+    Approach this task using the following steps:
+
+    1. UNDERSTAND THE CONTEXT:
+    - Carefully analyze any images provided
+    - Note key visual elements, colors, spatial relationships, and text
+    - Consider both explicit and implicit information
+
+    2. REASONING PROCESS:
+    - Break down complex questions into simpler components
+    - Consider multiple perspectives and potential interpretations
+    - Look for relationships between different elements
+    - Apply common sense reasoning to fill gaps
+
+    3. EVIDENCE GATHERING:
+    - Identify relevant information from both visual and textual sources
+    - Cross-reference details across multiple sources when available
+    - Note any uncertainties or assumptions made
+
+    4. SYNTHESIS:
+    - Combine evidence from all sources
+    - Explain your reasoning step by step
+    - Support conclusions with specific references
+    - Address any potential contradictions
+
+    Original Question:
+    {question}
+
+    Let's solve this step by step:
+    1) First, let's understand what we're looking for...
+    2) Next, let's examine the available evidence...
+    3) Now, let's reason about the connections...
+    4) Finally, let's form a complete answer...
+
+    Based on this analysis, here is my response:
+    """
+
+    # define the parameters for multimodal inference
+    low_resolution_img: bool = True
+    resize_img_dim: int = 800
 
 
 class LanceTableRetriever(BaseRetriever):
@@ -254,9 +320,9 @@ class LanceTableRetriever(BaseRetriever):
         # Extract 'chunks' from kwargs with a default value if not provided
         chunks = kwargs.get('chunks', '1, 2, 3')  # Default chunks
 
-        # get the disable tabular argument from the kwargs and return empty list if tabular is disabled 
+        # get the disable tabular argument from the kwargs and return empty list if tabular is disabled
         disable_tabular = kwargs.get('disable_tabular', False)
-       
+
         if disable_tabular:
             return []
 
@@ -285,14 +351,14 @@ class LanceRetrieverMultiModal(BaseRetriever):
 
     # define the specific retriever to use
     table: Any
-    k: int  
+    k: int
     mode: str
     embedding: Any
     vector_column_name: str
 
     def _process_documents(self, documents: list) -> List[Document]:
         """Process the documents to be returned"""
-        
+
         # define the container for the documents
         container: list = []
 
@@ -302,7 +368,7 @@ class LanceRetrieverMultiModal(BaseRetriever):
                 {
                     'page_image_bytes': document['page_image_bytes'],
                     'source': document['source'],
-                    'page': document['page'], 
+                    'page': document['page'],
                     'distance': document['_distance']
                 }
             )
@@ -311,11 +377,11 @@ class LanceRetrieverMultiModal(BaseRetriever):
 
     def search(self, query: Any, top_k: int = 2):
         """Search for similar documents using vector similarity search.
-        
+
         Args:
             query (str): The query text to search for
             top_k (int, optional): Number of results to return. Defaults to 2.
-            
+
         Returns:
             list: Top k most similar documents as a list
         """
@@ -323,9 +389,9 @@ class LanceRetrieverMultiModal(BaseRetriever):
         vec_q = query #self.get_query_embedding([query])
 
         # perform the search
-        r = self.table.search(vec_q, query_type="vector", 
-                              vector_column_name=self.vector_column_name).limit(top_k) 
-        
+        r = self.table.search(vec_q, query_type="vector",
+                              vector_column_name=self.vector_column_name).limit(top_k)
+
         # return the results in JSON format
         return r.to_list()
 
@@ -334,9 +400,9 @@ class LanceRetrieverMultiModal(BaseRetriever):
 
         # Perform the retrieval based on the query
         hit_lists = self.search(query, top_k=self.k)
-        
+
         return self._process_documents(hit_lists)
-    
+
 
 class LanceRetriever(BaseRetriever):
     """A toy retriever that contains the top k documents that contain the user query.
@@ -384,9 +450,9 @@ class LanceRetriever(BaseRetriever):
 
     def _get_relevant_documents(self, query: str, *, run_manager: CallbackManagerForRetrieverRun) -> List[Document]:
         """Sync implementations for retriever."""
-        
+
         # do the retrieval and querying
-        try: 
+        try:
             documents = self.table.search(
                 str(query),
             query_type=self.mode,
@@ -397,85 +463,126 @@ class LanceRetriever(BaseRetriever):
         return self._translate_lancedb_to_langchain(documents)
 
 
-# define the output JSON parser 
+# define the output JSON parser
 class RAGResponse(LangchainBaseModel):
     response: str = LangchainField(description="textual RAG response")
 
 
+class CitationGeneration(metaclass=ABCMeta):
+    """abstract base class for citation generation"""
+
+    @abstractmethod
+    def generate_citations(self, documents: list, source_field: str = 'source') -> str:
+        """generate citations from the documents' metadata sources."""
+        pass
+
+
+class CitationGenerationLangChain(CitationGeneration):
+    """implementation of the citation generation abstract base class"""
+
+    def generate_citations(self, documents: list, source_field: str = 'source') -> str:
+        """generate citations from the documents' metadata sources assuming the documents are LangChain Documents"""
+        try:
+          # Use OrderedDict to maintain insertion order and group by source
+          sources = OrderedDict()
+
+          for doc in documents:
+              if hasattr(doc, 'metadata') and source_field in doc.metadata:
+                  source = doc.metadata[source_field]
+                  page = doc.metadata.get('page', 'N/A')
+
+                  if source not in sources:
+                      sources[source] = set()
+                  sources[source].add(str(page))
+
+          # Format the citations
+          citations = []
+          for i, (source, pages) in enumerate(sources.items(), 1):
+              # Sort pages and join them
+              sorted_pages = sorted(pages, key=lambda x: int(x) if x.isdigit() else float('inf'))
+              page_str = ', '.join(sorted_pages)
+
+              citation = f"{i}) Retrieved from {source}. Page(s): {page_str}"
+              citations.append(citation)
+
+          # Join the citations with newlines
+          return "\n\n".join(citations)
+        except TypeError:
+          return 'Retrieved from LLM'
+
+
+class CitationGenerationMultiModal(CitationGeneration):
+    """implementation of the citation generation abstract base class"""
+
+    def generate_citations(self, documents: list, source_field: str = 'source') -> str:
+        """generate citations from the documents' metadata sources."""
+        # Use OrderedDict to maintain insertion order and group by source
+        try:
+          sources = OrderedDict()
+
+          for doc in documents:
+              source = doc[source_field]
+              page = doc.get('page', 'N/A')
+
+              if source not in sources:
+                  sources[source] = set()
+              sources[source].add(str(page))
+
+          # Format the citations
+          citations = []
+          for i, (source, pages) in enumerate(sources.items(), 1):
+              # Sort pages and join them
+              sorted_pages = sorted(pages, key=lambda x: int(x) if x.isdigit() else float('inf'))
+              page_str = ', '.join(sorted_pages)
+
+              citation = f"{i}) Retrieved from {source}. Page(s): {page_str}"
+              citations.append(citation)
+
+          # Join the citations with newlines
+          return "\n\n".join(citations)
+        except TypeError:
+          return 'Retrieved from LLM'
+
+
 class RAGModelUtilities:
+    """A utility class for managing Retrieval-Augmented Generation (RAG) models.
+
+    This class is responsible for initializing and configuring the model specifications,
+    handling chat history management, and managing the streaming of responses from the language model.
+    It includes functionality for generating queries based on user input,
+    maintaining a count of query generations, and managing citation generation through different strategies.
+    The class also provides methods for cleaning user queries and updating the stream URL for the
+    language model, ensuring that the model can adapt to different environments and configurations.
+    """
 
     def __init__(self, stream_url: str = 'http://127.0.0.1:8005/stream'):
         self.model_specs: BaseModel = ModelSpecifications()
         self.chat_history_management = ChatHistoryManagement()
         self.stream_url = stream_url
-        self.stream_handler = None  # Initialize stream_handler as None
-        self.llm_baseline = None    # Initialize llm_baseline as None
-        self._initialize_llm()      # Move LLM initialization to separate method
+        self.stream_handler = MyStreamHandler(url=self.stream_url, start_token="")  # Initialize stream_handler as None
 
-        # define the query generation counter 
+        # define the data loader which contains the vector database, the settings, and the utilities
+        self.data_loader = get_data_loader()  # Use the cached data loader
+
+        # define the baseline model
+        self.baseline_model = self.data_loader.initialize_llm(self.stream_handler, self.model_specs)
+
+        # define the query generation counter
         self.query_generation_count = 0
 
-        # define the prompts 
-        self.rag_fusion_prompt, self.main_rag_prompt, self.concatenation_prompt = self._create_rag_templates()
-    
-    def _initialize_llm(self):
-        """Initialize the LLM with current stream_url"""
-        try:
-            if self.model_specs.private_llm_mode:
-                os.environ["OPENAI_API_VERSION"] = "2024-02-01"
-                os.environ["AZURE_OPENAI_ENDPOINT"] = azure_endpoint
-                os.environ["AZURE_OPENAI_API_KEY"] = azure_api_key
+        # define the dictionary of citation generation classes
+        self.citation_generation_dict = {
+            'langchain': CitationGenerationLangChain(),
+            'multimodal': CitationGenerationMultiModal()
+        }
 
-                self.stream_handler = MyStreamHandler(url=self.stream_url, start_token="")
-                
-                self.llm_baseline = AzureChatOpenAI(
-                    temperature=self.model_specs.temperature,
-                    azure_deployment=self.model_specs.model_deployment_name,
-                    max_retries=2,
-                    max_tokens=self.model_specs.max_tokens,
-                    callbacks=[self.stream_handler]
-                )
-            else:
-                self.llm_baseline = ChatOpenAI(
-                    temperature=self.model_specs.temperature,
-                    openai_api_key=api_key,
-                    model=self.model_specs.model_id
-                )
-        except:
-            raise Exception("Invalid API key provided")
-    
+        # define the prompts
+        self.rag_fusion_prompt, self.main_rag_prompt, self.concatenation_prompt = self._create_rag_templates()
+
     def update_stream_url(self, new_url: str):
         """Update stream_url and reinitialize LLM with new handler"""
         self.stream_url = new_url
-        self._initialize_llm()
-
-    def generate_citations(self, documents: list, source_field: str = 'source') -> str:
-        """Generate citations from the documents' metadata sources."""
-        
-        # Use OrderedDict to maintain insertion order and group by source
-        sources = OrderedDict()
-        
-        for doc in documents:
-            if hasattr(doc, 'metadata') and source_field in doc.metadata:
-                source = doc.metadata[source_field]
-                page = doc.metadata.get('page', 'N/A')
-                
-                if source not in sources:
-                    sources[source] = set()
-                sources[source].add(str(page))
-
-        # Format the citations
-        citations = []
-        for i, (source, pages) in enumerate(sources.items(), 1): 
-            # Sort pages and join them
-            sorted_pages = sorted(pages, key=lambda x: int(x) if x.isdigit() else float('inf'))
-            page_str = ', '.join(sorted_pages)
-            
-            citation = f"{i}) Retrieved from {source}. Page(s): {page_str}"
-            citations.append(citation)
-        
-        # Join the citations with newlines
-        return "\n\n".join(citations)
+        #self.baseline_model = self.data_loader.initialize_llm()
 
     def clean_query(self, query: str) -> str:
         """Clean the query by removing invalid formatting characters."""
@@ -518,13 +625,13 @@ class RAGModelUtilities:
     def get_chat_history_from_management(self, user_id: int, model_id: int, chat_id: int, chat_memory_threshold: int = 2):
         """Get and format the chat history from the chat history management."""
         chat_hist_result = self.chat_history_management.get_chat_history(user_id=user_id, model_id=model_id, chat_id=chat_id)
-        
+
         # Process and format the chat history
         formatted_chat_history = []
         for question, answer, timestamp in chat_hist_result:
             formatted_entry = f"Q: {question}\nA: {answer}\n"
             formatted_chat_history.append(formatted_entry)
-        
+
         return formatted_chat_history[-chat_memory_threshold:]
 
     def add_chat_history_to_management(self, user_id: int, model_id: int, chat_id: int, question_answer_pair: tuple) -> None:
@@ -551,17 +658,13 @@ class RAGModelUtilities:
     def generate_queries(self, question: str) -> List[str]:
         # Increment the counter and log the generation
         self.query_generation_count += 1
-        #print(f"Generating queries for question: '{question}' (Count: {self.query_generation_count})")
-
-        # Add a small delay to simulate processing time
-        #sleep(1)
 
         # Define the chain which generates the queries
         generate_queries: Any = (
             self.rag_fusion_prompt
-            | self.llm_baseline
+            | self.baseline_model
             | StrOutputParser()
-            | (lambda x: x.split("\n"))
+            | (lambda x: [line.strip() for line in x.split("\n") if line.strip()])
             | RunnableLambda(lambda queries: [self.clean_query(q) for q in queries])
         )
         result = generate_queries.invoke({"question": question})
@@ -580,23 +683,40 @@ class RAGModelUtilities:
             raise ValueError("Missing required parameter: user_id")
         if chat_id is None:
             raise ValueError("Missing required parameter: chat_id")
-        
+
         return [user_id, chat_id]
 
 
 class TextModel(RAGModelUtilities):
     """define the main model class with the chain for the textual side of the model"""
-    
+
     def __init__(self, stream_url: str = 'http://127.0.0.1:8005/stream'):
         super().__init__(stream_url=stream_url)
-        self.data_loader = DataLoader()
+
+        # define the model id
         self.model_id: int = 1
+
+        # define the retrievers for the text and table databases (LanceDB in this case)
         self.text_retriever, self.table_retriever = self._create_lancedb_retrievers()
+
+        # define the question asked by the user, defined globally in the class
         self.question: Union[str, None] = None
+
+        # define whether to accept vision in the text model
         self.use_vision, self.image_bytes = False, None
+
+        # define the reranking algorithm for post-retrieval processing
         self.ranker = Ranker()
+
+        # define the output parser
         self.output_parser = JsonOutputParser(pydantic_object=RAGResponse)
+
+        # define the chat history (only for debugging purposes)
         self.chat_history: list = []
+
+        # define the citation generation class
+        self.citation_generator = self.citation_generation_dict[self.model_specs.citation_generation_type]
+
         #self.query_generation_count = 0
 
     def _process_streamed_response(self, response: str) -> str:
@@ -617,15 +737,15 @@ class TextModel(RAGModelUtilities):
     def _call_llm(self, prompt: ChatPromptTemplate, **kwargs) -> str:
         """Call the LLM with the prompt and stream the response."""
         if kwargs.get('image_input', None) is None:
-            message_content = [{"type": "text", "text": prompt.format(question=kwargs['question'], 
+            message_content = [{"type": "text", "text": prompt.format(question=kwargs['question'],
                                                                       text_context=kwargs['text_context'],
                                                                       table_context=kwargs['table_context'],
                                                                       history=kwargs['history'])}]
             messages = [HumanMessage(content=message_content)]
-            response = self.llm_baseline.stream(messages)
+            response = self.baseline_model.stream(messages)
             return {"response": self._process_streamed_response(response)}
         else:
-            message_content = [{"type": "text", "text": prompt.format(question=kwargs['question'], 
+            message_content = [{"type": "text", "text": prompt.format(question=kwargs['question'],
                                                                       text_context=kwargs['text_context'],
                                                                       table_context=kwargs['table_context'],
                                                                       history=kwargs['history'])}]
@@ -636,7 +756,7 @@ class TextModel(RAGModelUtilities):
                 })
 
             messages = [HumanMessage(content=message_content)]
-            response = self.llm_baseline.stream(messages)
+            response = self.baseline_model.stream(messages)
             return {"response": self._process_streamed_response(response)}
 
     def count_documents_in_collection(self, collection_name: str):
@@ -757,7 +877,7 @@ class TextModel(RAGModelUtilities):
                     metadata=document['metadata']
                 )
             )
-        
+
         return reranked_documents
 
     def colbert_reranker(self, results: list[list]):
@@ -858,13 +978,14 @@ class TextModel(RAGModelUtilities):
             })
             | RunnableLambda(lambda x: {
                 "response": self.data_loader.format_output(x['llm_response']['response']),
-                "combined_context": x["combined_context"]
+                # "combined_context": x["combined_context"]
+                "references": self.citation_generator.generate_citations(x["combined_context"], source_field=kwargs['source_field']),
             })
-            | RunnableLambda(lambda x: {
-                "response": x["response"],
-                "references": self.generate_citations(x["combined_context"], source_field=kwargs['source_field']), 
-                'combined_context': x['combined_context']
-            })
+            # | RunnableLambda(lambda x: {
+            #     "response": x["response"],
+            #     "references": self.generate_citations(x["combined_context"], source_field=kwargs['source_field']),
+            #     # 'combined_context': x['combined_context']
+            # })
         )
 
         return final_rag_chain
@@ -920,9 +1041,9 @@ class TextModel(RAGModelUtilities):
         except AttributeError:
             # Handle the case where settings or chat_history attributes are missing
             chain = self._create_chain(
-                self.get_chat_history_from_management(user_id=user_id, 
-                                                      model_id=self.model_id, 
-                                                      chat_id=chat_id, 
+                self.get_chat_history_from_management(user_id=user_id,
+                                                      model_id=self.model_id,
+                                                      chat_id=chat_id,
                                                       chat_memory_threshold=chat_memory_threshold_default),
                 source_field=source_field,
                 **kwargs
@@ -937,7 +1058,7 @@ class TextModel(RAGModelUtilities):
 
         # Add the response to the chain history
         #self.chat_history.append({self.question: output})
-        try: 
+        try:
             self.add_chat_history_to_management(user_id=user_id, model_id=self.model_id, chat_id=chat_id, question_answer_pair=(self.question, output['response']))
         except Exception:
             raise Exception('No user_id found. User must login first')
@@ -1034,9 +1155,6 @@ class MultiModalModel(RAGModelUtilities):
         super().__init__(stream_url=stream_url)
         # define the backend resources regarding the colpali model and searching capabilities
         #self.colpali_resources: ColPaliInference = ColPaliInference()
-
-        # define the data loader
-        self.data_loader = DataLoader()
         self.model_id: int = 1
 
         # define the output parser
@@ -1045,15 +1163,18 @@ class MultiModalModel(RAGModelUtilities):
         # define the retriever
         self.retriever = self._create_retrievers()
 
+        # define the citation generation class
+        self.citation_generator = self.citation_generation_dict[self.model_specs.citation_generation_type]
+
     def _create_retrievers(self):
         """Create the retrievers for multimodal search"""
-        
+
         # Initialize the multimodal retriever
         multimodal_retriever = LanceRetrieverMultiModal(
             table=self.data_loader.lancedb_client[4], # 4 is for multimodal table
             k=self.data_loader.settings.k_top_multimodal,
             mode='cosine',
-            vector_column_name='vector', 
+            vector_column_name='vector',
             embedding=self.data_loader.embedding
         )
 
@@ -1084,42 +1205,66 @@ class MultiModalModel(RAGModelUtilities):
             })
             | RunnableLambda(lambda x: {
                 "response": x["response"]["response"],
-                "references": self.generate_citations(x["combined_context"], source_field='source'),
+                "references": self.citation_generator.generate_citations(x["combined_context"], source_field='source'),
                 "combined_context": x["combined_context"]
             })
         )
 
         return final_chain
 
-    def _create_prompts(self, question: str, image_bytes_list: list) -> list:
-        """Create the prompts for the model, including text and image content."""
-        
-        # Format the question into the RAG template
-        formatted_text = self.model_specs.main_rag_template.format(question=question)
-        
-        # Create the message content starting with the text part
-        message_content = [{"type": "text", "text": formatted_text}]
-        
-        # Iterate through each image and add it to the message content
-        for image_bytes in image_bytes_list:
-            # Encode the image bytes to base64
+    @staticmethod
+    def _handle_image_bytes_payload(image_bytes: bytes) -> str:
+        """handle the image bytes payload"""
+
+        # Make sure we have a proper data URL format
+        if not image_bytes.startswith('data:image/'):
+            # Encode to base64 if it's raw bytes
             image_base64 = base64.b64encode(image_bytes).decode('utf-8')
-            
+            image_payload = f"data:image/jpeg;base64,{image_base64}"
+        else:
+            image_payload = image_bytes
+
+        return image_payload
+
+    def _create_prompt(self, input_dict: dict) -> list:
+        """Create the prompt for the model, including text and image content."""
+
+        # Extract question and vision_results from input dictionary and define the seen images set to keep track of duplicates
+        question, vision_results, seen_images = input_dict['question'], input_dict['vision_context'], set()
+        print(f"Number of total retrieved images: {len(vision_results)}")
+        # Create the message content starting with the text part and format the prompt
+        message_content = [{"type": "text", "text": self.model_specs.multimodal_rag_template.format(question=question)}]
+
+        # Iterate through each image result
+        for result in vision_results:
+            # Create a unique identifier for this image using source and page
+            image_id = (result['source'], result['page'])
+
+            # Skip if we've seen this image or add it to the seen images
+            if image_id in seen_images:
+                continue
+            else:
+                seen_images.add(image_id)
+
+            # Get the image bytes from the result
+            image_payload = self._handle_image_bytes_payload(result['page_image_bytes'])
+
             # Add the image to the message content
             message_content.append({
                 "type": "image_url",
-                "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"},
+                "image_url": {"url": image_payload, "detail":
+                            "low" if self.model_specs.low_resolution_img else "high",
+                            "resize": self.model_specs.resize_img_dim}
             })
-        
-        # Create the HumanMessage
-        message = HumanMessage(content=message_content)
-        
-        return [message]
+            print(f"Added image from source: {result['source']}, page: {result['page']}")
+
+        # Create the HumanMessage and return it
+        return [HumanMessage(content=message_content)]
 
     def _process_vision_response(self, response: list) -> Any:
         """process the colpali response"""
-        
-        # create the containers for images 
+
+        # create the containers for images
         container_images = []
 
         # iterate through the response and append the images to the container
@@ -1130,7 +1275,7 @@ class MultiModalModel(RAGModelUtilities):
 
     def _query_colpali(self, question: str) -> Any:
         """query the colpali model"""
-        
+
         # clean the user question
         cleaned_question = self._clean_user_question(question)
 
@@ -1142,31 +1287,24 @@ class MultiModalModel(RAGModelUtilities):
 
         return processed_response
 
-    def _call_llm(self, question: str, vision_results: list) -> Dict[str, Any]:
-        """Call the LLM with the prompt and image data."""
+    def _call_llm(self, prompt: Any) -> str:
+        """Call the LLM with the prompt and image data. The output is a string."""
 
-        # Define the chain for the LLM
-        chain = (
-            {
-                "question": RunnablePassthrough(),
-                "vision_results": RunnablePassthrough()
-            }
-            | RunnableLambda(lambda x: self._create_prompts(x['question'], x['vision_results']))
-            | RunnableLambda(lambda message: self.llm_baseline.stream(message))
-            | StrOutputParser()
-        )
+        # get the results from the LLM
+        results = self.baseline_model.invoke(prompt)
 
-        # Call the chain
-        response = chain.invoke({"question": question, "vision_results": vision_results}) 
-        
-        return {'response': response}
-    
+        # get the total input and output tokens from the results
+        print(f'Total input tokens: {results.usage_metadata["input_tokens"]}')
+        print(f'Total output tokens: {results.usage_metadata["output_tokens"]}')
+
+        return results.content
+
     def get_query_embedding_voyageai(self, query):
         """Get the embedding vector for a query using the multimodal embedding model.
-        
+
         Args:
             query: The query text to embed
-            
+
         Returns:
             numpy.ndarray: The embedding vector as a numpy array with float32 dtype
         """
@@ -1176,42 +1314,48 @@ class MultiModalModel(RAGModelUtilities):
 
     def _create_chain(self, chat_history: list = None):
         """create the chain for the model"""
-        
-        # Define the fusion chain with reranking mechanism for the text retriever
-        retrieval_text_rag_fusion = (
-            RunnableLambda(lambda inputs: self.generate_queries(inputs["question"]))
-            | RunnableLambda(lambda inputs: [self.get_query_embedding_voyageai(x) for x in inputs]) 
-            | self.retriever.map()
+
+        # define the retrieval chain for the multimodal model to generate the query embeddings and output the images as byte strings in a JSON structure
+        retrieval_rag_fusion = (
+            RunnableLambda(lambda x: {
+                'questions_array': self.generate_queries(x['question'])
+            })
+            | RunnableLambda(lambda x: {
+                'query_embeddings': [*map(self.get_query_embedding_voyageai, x['questions_array'])]
+            })
+            | RunnableLambda(lambda x: [self.retriever.invoke(q) for q in x['query_embeddings']])
+            | RunnableLambda(lambda x: [item for sublist in x for item in sublist])  # Flatten the list
         )
 
-        print(retrieval_text_rag_fusion.invoke({"question": "What are the items in the table of contents?"}))
+        # Define the chain for the LLM
+        llm_call_chain = (
+            RunnableLambda(lambda x: self._create_prompt(x))
+            | RunnableLambda(lambda x: self._call_llm(x))
+            | StrOutputParser()
+        )
 
         # use the chain to create the final chain
         final_chain = (
             {
                 "question": RunnablePassthrough(),
-                "history": lambda x: chat_history if chat_history else [],
-                "vision_context": retrieval_text_rag_fusion
+                "history": lambda _: chat_history if chat_history else [],
+                "vision_context": retrieval_rag_fusion
             }
             | RunnableLambda(lambda x: {
                 **x,
-                "cleaned_responses": self._process_vision_response(x["vision_context"]),
+                "llm_response": llm_call_chain.invoke(x)
             })
             | RunnableLambda(lambda x: {
-                **x,
-                "llm_response": self._call_llm(x["question"], x["cleaned_responses"])
+                "result": x["llm_response"],
+                "references": self.citation_generator.generate_citations(x["vision_context"], source_field='source'),
             })
-            | RunnableLambda(lambda x: {
-                "response": x["llm_response"]["response"],
-                "references": self.generate_citations(x["vision_context"], source_field='source'),
-            })
-        )   
+        )
 
         return final_chain
 
     def invoke(self, question: str, chat_memory_threshold_default: int = 2, **kwargs) -> Dict[str, Any]:
         """invoke the model"""
-        
+
         # Clean the question
         self.question = self.clean_query(question)
 
@@ -1228,22 +1372,21 @@ class MultiModalModel(RAGModelUtilities):
             print(new_stream_url)
         except Exception as e:
             print("error printing stream_url", e)
-        
+
         # create the chain
         chain = self._create_chain(chat_history=chat_history)
 
         # invoke the chain
         output = chain.invoke({"question": self.question})
-
-        return {"result": output}
+        return output
 
 
 # TO DO: deploy this on a personal cloud server for privacy reasons
 class AudioTranscriptionModel(RAGModelUtilities):
     """Class for the audio transcription model using Whisper and GPT-3.5-turbo."""
 
-    # define which whisper model to use 
-    whisper_model_name: str = 'tiny' # or use base, small, turbo 
+    # define which whisper model to use
+    whisper_model_name: str = 'tiny' # or use base, small, turbo
 
     def __init__(self):
         super().__init__()  # Initialize the parent class RAGModelUtilities
@@ -1312,17 +1455,20 @@ def test():
 username = 'testuser'
 email = 'testuser@example.com'
 password = 'securepassword'
-model_type = 1 # text model 
+model_type = 1 # text model
 chat_id = 2
 user_id = 1
 
-#model = TextModel(stream_url='http://5.78.113.143:8005/stream')
-#print(model.invoke("What is an endogenous variable in econometrics?", disable_tabular=False, 
-#             user_id=user_id, chat_id=chat_id))
+model = TextModel(stream_url='http://5.78.113.143:8005/stream')
+print(model.invoke("What is an endogenous variable in econometrics?", disable_tabular=False,
+             user_id=user_id, chat_id=chat_id))
 
-model = MultiModalModel(stream_url='http://5.78.113.143:8005/stream')
-print(model.invoke("What is an endogenous variable in econometrics?", disable_tabular=False, 
-            user_id=user_id, chat_id=chat_id))
+#model = MultiModalModel(stream_url='http://5.78.113.143:8005/stream')
+#print(model.invoke("Describe this project. How does it work?", disable_tabular=False,
+#            user_id=user_id, chat_id=chat_id))
+#query = 'What is an endogenous variable in econometrics?'
+#query_vector = model.get_query_embedding_voyageai(query)
+#print(model.retriever.invoke(query_vector))
 
 #audio_model = AudioTranscriptionModel()
 #audio_model.process_audio_file('/content/test_jarvis.wav', False)

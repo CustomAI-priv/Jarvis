@@ -7,12 +7,10 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from backend.text_model import TextModel, AudioTranscriptionModel
 from backend.analytical_model import AgentConfig
-from backend.client_kpis import ClientKPI
 import base64
 import random 
 from pydantic import BaseModel, Field
 import asyncio
-import requests
 # email imports
 import smtplib, ssl
 from email.mime.text import MIMEText
@@ -36,11 +34,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-# Define the Pydantic model for the request body
-class QuestionRequest(BaseModel):
-    question: str
 
 # Initialize models
 text_model = TextModel()
@@ -252,6 +245,10 @@ async def stream_user_response(user_id: str, chat_id: str):
     return StreamingResponse(event_generator(), media_type="text/plain", headers={"Cache-Control": "no-cache"})
 
 
+# Define the Pydantic model for the request body
+class QuestionRequest(BaseModel):
+    question: str
+
 @app.post("/text_model/")
 def text_model_endpoint(
     user_id: str,
@@ -293,12 +290,6 @@ def text_model_endpoint(
                         os.remove(temp_path)
     
         # Process the request
-        try:
-            requests.post(f"http://5.78.113.143:8005/update_stream/{user_id}/{chat_id}", json={"output": "\n<START>\n"})
-        except requests.exceptions.RequestException as e:
-            print(f"Failed to send data for {user_id} and {chat_id}: {e}")
-
-        # Process the request
         if file_contents:
             print("running file_content invoke")
             # Process files and question if both are provided
@@ -326,11 +317,6 @@ def text_model_endpoint(
             result = text_model.invoke(
                 question, disable_tabular=False, user_id=user_id, chat_id=chat_id
             )
-        
-        try:
-            requests.post(f"http://5.78.113.143:8005/update_stream/{user_id}/{chat_id}", json={"output": "\n<END>\n"})
-        except requests.exceptions.RequestException as e:
-            print(f"Failed to send data for {user_id} and {chat_id}: {e}")
 
         return {"result": result, "status": 200, "detail": ""}
     except Exception as e:
@@ -371,11 +357,6 @@ def analytical_model_endpoint(
                     if os.path.exists(temp_path):
                         os.remove(temp_path)
 
-        try:
-            requests.post(f"http://5.78.113.143:8005/update_stream/{user_id}/{chat_id}", json={"output": "\n<START>\n"})
-        except requests.exceptions.RequestException as e:
-            print(f"Failed to send data for {user_id} and {chat_id}: {e}")
-
         # Process the request
         if file_contents:
             # Process files and question if both are provided
@@ -398,11 +379,6 @@ def analytical_model_endpoint(
                 user_id=user_id,
                 chat_id=chat_id
             )
-
-        try:
-            requests.post(f"http://5.78.113.143:8005/update_stream/{user_id}/{chat_id}", json={"output": "\n<END>\n"})
-        except requests.exceptions.RequestException as e:
-            print(f"Failed to send data for {user_id} and {chat_id}: {e}")
 
         return {"result": result, "status": 200, "detail": ''}
     except Exception as e:
@@ -438,7 +414,8 @@ async def login(email: str, password: str):
         }
 
 
-def send_verification_code(email: str, password: str):
+@app.post("/send_verification_code")
+async def send_verification_code(email: str, password: str):
     """Send a verification code to the user's email"""
     try:
         # Generate a random 6-digit verification code
@@ -520,7 +497,7 @@ async def logout(username: str, password: str):
 @app.post("/get_chat_history")
 async def get_chat_history(user_id: int, model_id: int, chat_id: int):
     try:
-        chat_history = chat_history_mgmt.get_chat_ids_sorted_by_timestamp(user_id, model_id, chat_id)
+        chat_history = chat_history_mgmt.get_chat_history(user_id, model_id, chat_id)
         return {
             "status": 200,
             "result": chat_history,
@@ -572,27 +549,13 @@ async def delete_chat(chat_id: int):
 
 # TODO: connect this to the text_model or analytical_model
 @app.post("/transcribe_audio")
-async def transcribe_audio(user_id: str, chat_id: str, audio_file_path: str, clean_transcription: bool = True, model_id: int = 1):
+async def transcribe_audio(audio_file_path: str, clean_transcription: bool = True):
     try:
         # transcribe the audio file and extract the text
         transcription = audio_transcription_model.process_audio_file(audio_file_path, clean_transcription)
-
-        if model_id == 1:
-            # use the text model
-            result = text_model.invoke(transcription, user_id=user_id, chat_id=chat_id)
-        elif model_id == 2:
-            # use the analytical model
-            result = analytical_model.conditional_invoke(transcription, user_id=user_id, chat_id=chat_id)
-        else: 
-            return {
-                "status": 200,
-                "result": {"result": transcription},
-                "detail": "Audio transcribed successfully but no model was specified"
-            }
-
         return {
             "status": 200,
-            "result": result,
+            "result": transcription,
             "detail": "Audio transcribed successfully"
         }
     except:
@@ -608,9 +571,6 @@ async def register_user(username: str, email: str, password: str):
     try:
         # register the user
         success = user_mgmt.register_user(username, email, password)
-
-        # send the verification code
-        send_verification_code(email, password)
         
         if success:
             return {
@@ -625,60 +585,6 @@ async def register_user(username: str, email: str, password: str):
                 "detail": "Username or email already exists"
             }
     except:
-        return {
-            "status": 500,
-            "result": None,
-            "detail": "Internal Server Error - please contact support at contact@thecustom.ai"
-        }
-
-
-@app.get("/get_user_by_user_id")
-async def get_user_by_user_id(user_id: int):
-    try:
-        # Get user details from database
-        user = user_mgmt.get_user(user_id)
-        
-        if user:
-            # Convert tuple to dictionary for JSON response
-            user_details = {
-                "id": user[0],
-                "username": user[1], 
-                "email": user[2],
-                "timestamp": user[3]
-            }
-            return {
-                "status": 200,
-                "result": user_details,
-                "detail": "User details retrieved successfully"
-            }
-        else:
-            return {
-                "status": 404,
-                "result": None, 
-                "detail": "User not found. Please register before using this endpoint."
-            }
-    except:
-        return {
-            "status": 500,
-            "result": None,
-            "detail": "Internal Server Error - please contact support at contact@thecustom.ai"
-        }
-
-
-
-@app.post("/calculate_kpi", response_model=Dict[str, Any])
-async def calculate_kpi(user_id: int):
-    """Calculate a key performance indicator (KPI) for a client."""
-    try:
-        # get the user's KPIs based on the user_id
-        kpi = ClientKPI(user_id)
-        result = kpi.facade()
-        return {
-            "status": 200,
-            "result": result,
-            "detail": "KPI calculated successfully"
-        }
-    except Exception as e:
         return {
             "status": 500,
             "result": None,

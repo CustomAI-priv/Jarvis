@@ -75,32 +75,42 @@ from langchain.schema import Document, SystemMessage, HumanMessage
 from langchain.retrievers import ContextualCompressionRetriever
 from langchain.retrievers.document_compressors import LLMChainExtractor
 # from langchain.chat_models import ChatOpenAI
-from langchain_openai import ChatOpenAI
+from langchain_openai import ChatOpenAI, AzureOpenAI, AzureChatOpenAI
 from langchain.prompts import PromptTemplate, ChatPromptTemplate, MessagesPlaceholder
 from langchain.chains import LLMChain
 from lancedb.pydantic import LanceModel, Vector
 from lancedb.rerankers import LinearCombinationReranker
+import sys
 
+# Add the project root to the Python path
 try:
-  from backend.setup import DataLoader, api_key, claude_api_key
-  # from settings import Settings, CodingModelSpecs
-  # from utils import format_file_name, get_file_extension
-  from backend.text_model import ModelSpecifications, LanceTableRetriever, LanceRetriever
-  from backend.chat_history_management import ChatHistoryManagement
+    sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 except:
-    print("using alternate import path")
+    pass
+
+# Import required modules
+try:
+    from backend.setup import DataLoader
+    from backend.api_keys import api_key, claude_api_key, azure_api_key, azure_endpoint, voyage_api_key
+    from backend.text_model import ModelSpecifications, LanceTableRetriever, LanceRetriever
+    from backend.chat_history_management import ChatHistoryManagement
+except ImportError:
     try:
-        from setup import DataLoader, api_key, claude_api_key
-        # from settings import Settings, CodingModelSpec
-        # from utils import format_file_name, get_file_extension
+        from setup import DataLoader
+        from api_keys import api_key, claude_api_key, azure_api_key, azure_endpoint, voyage_api_key
         from text_model import ModelSpecifications, LanceTableRetriever, LanceRetriever
         from chat_history_management import ChatHistoryManagement
-    except ImportError:
-        pass
-    pass
+    except ImportError as e:
+        print(f"Error importing modules: {e}")
+        raise
 
 import autogen
 from concurrent.futures import ThreadPoolExecutor, as_completed
+try:
+    from agent_prompts import system_msg_engineer, system_msg_planner, system_msg_critic, system_msg_summary, system_msg_question_enhancer, system_msg_debugger
+except:
+    from backend.agent_prompts import system_msg_engineer, system_msg_planner, system_msg_critic, system_msg_summary, system_msg_question_enhancer, system_msg_debugger
+    pass
 
 import io
 from datetime import datetime
@@ -109,14 +119,22 @@ from typing import Iterable
 from PIL import Image
 import imgkit
 import aide
+from abc import ABC, abstractmethod
 
 from openai import AzureOpenAI
 from openai.types import FileObject
 from openai.types.beta.threads import Message, TextContentBlock, ImageFileContentBlock
 
-
 from langchain.callbacks.base import BaseCallbackHandler
 import requests
+from functools import lru_cache
+
+
+@lru_cache(maxsize=1)
+def get_data_loader():
+    """Cached data loader initialization"""
+    data_loader = DataLoader()
+    return data_loader
 
 
 class MyStreamHandler(BaseCallbackHandler):
@@ -150,8 +168,42 @@ class CodeOutput(BaseModel):
     code: str = Field(description="Code block not including import statements")
 
 
+class AgentGeneralSettings(BaseModel):
+    """define the general settings for the agent"""
+
+    # define the available plots
+    plotly_charts: dict = {
+        "Scatter Plot": "Use to visualize relationships between two continuous variables, like correlations or trends.",
+        "Line Plot": "Ideal for showing trends over time or continuous data, such as stock prices or time series data.",
+        "Bar Chart": "Use to compare categorical data or show distribution for discrete variables, such as sales by region.",
+        "Histogram": "Best for displaying the distribution of a single continuous variable, such as frequency distributions.",
+        "Box Plot": "Use to show data spread and detect outliers, especially when comparing groups or categories.",
+        "Violin Plot": "Good for visualizing data distributions with added density information, particularly for comparing categories.",
+        "Pie Chart": "Useful for visualizing proportions or parts of a whole, such as market share breakdowns.",
+        "Sunburst Chart": "Best for hierarchical data visualization where categories are nested, like organizational structures.",
+        "Treemap": "Great for visualizing hierarchical data with relative sizes, such as budget breakdowns or part-to-whole relationships.",
+        "Funnel Chart": "Use to visualize stages in a process, such as sales pipelines or drop-off rates in conversions.",
+        "Density Heatmap": "Helpful for visualizing data density in two dimensions, identifying patterns or clusters.",
+        "Contour Plot": "Good for visualizing continuous data with contour lines, such as showing regions of high concentration.",
+        "Bubble Chart": "Useful for comparing three variables at once, where the third variable is represented by bubble size.",
+        "Polar Chart": "Best for displaying data in a radial coordinate system, such as directional or cyclical data.",
+        "Radar Chart": "Ideal for comparing multiple variables for several entities, such as benchmarking performance metrics.",
+        "Area Chart": "Similar to a line plot, use to show cumulative data over time, like total sales or stock volume.",
+        "Bubble Map": "Great for geographical scatter plots where bubble size represents data, such as population by region.",
+        "Choropleth Map": "Use to visualize values over geographic regions, such as GDP or population density across countries.",
+        "3D Scatter Plot": "Useful for plotting relationships between three continuous variables in a 3D space.",
+        "3D Surface Plot": "Best for visualizing complex three-dimensional surfaces, such as terrain or mathematical functions.",
+        "Waterfall Chart": "Ideal for showing the cumulative effect of sequential values, such as profit and loss breakdowns."
+    }
+
+
 class AgentLLMConfig(BaseModel):
     """define the language models to use for the agents"""
+
+    # define the private LLM variables
+    model_id: str = 'gpt-4o'
+    model_deployment_name: str = 'jarvis_llm'
+    private_llm_mode: bool = False
 
     # define the variables for primary engineer LLM
     llm_primary_engineer_temperature: float = 0
@@ -161,130 +213,203 @@ class AgentLLMConfig(BaseModel):
     # define the variables for the planner LLM
     llm_planner_temperature: float = 0
     llm_planner_model: str = 'gpt-4o'
-    #llm_planner_max_tokens: int = 3000
+    llm_planner_max_tokens: int = 1000
 
     # define llm for the follow up task
     llm_follow_up_task_model: str = 'gpt-4o-mini'
     llm_follow_up_task_temperature: float = 0
     llm_follow_up_task_max_tokens: int = 50
 
-    # path to save the charts 
-    chart_save_path: str = '/root/BizEval/coding/'
+    # define llm for the summary task
+    llm_summary_model: str = 'gpt-4o-mini'
+    llm_summary_temperature: float = 0
+    llm_summary_max_tokens: int = 200
+
+    # path to save the charts
+    output_save_path: str = 'charts/'
+    file_save_path: str = 'coding/'
+    top_k_csv_files: int = 3
+    csv_file_manager: int = 1 # 1 is for DB manager and 2 is for local file manager (non-DB)
 
 
-class AnalyticalModelRetrieverProcessing():
-    """all the retriever functionality for the analytical model"""
+class AgentGeneralTools():
+    """define the general tools for the agent"""
 
-    # set the json mode to true
-    json_mode: bool = False # True
-    predownloaded_mode: bool = True
+    def __init__(self):
+        """initialize the general tools"""
 
-    def __init__(self, stream_url: str = 'http://127.0.0.1:8005/stream'):
-        # create directory called coding and charting
-        os.makedirs("coding", exist_ok=True)
+        # define the chat history management
+        self.chat_history_management = ChatHistoryManagement()
 
-        # set the stream url
-        self.stream_url = stream_url
-
-        # define the data loader 
+        # define the data loader
         self.data_loader = DataLoader()
 
-        # Set k to 2 for retrieving top 2 documents
-        self.k = self.data_loader.settings.top_k_csv_files
-    
-        # initialize the agent llm config
-        self.agent_llm_config = AgentLLMConfig()
+    # count the tokens from a string that enter the language model
+    @staticmethod
+    def num_tokens_from_string(string: str, encoding_name: str) -> int:
+        encoding = tiktoken.get_encoding(encoding_name)
+        num_tokens = len(encoding.encode(string))
+        return num_tokens
 
-        # create the lancedb retriever
-        self.table_descriptions_retriever = self._create_table_descriptions_retriever()
-        
-        self.stream_handler = MyStreamHandler(url=self.stream_url, start_token="")
+    def count_tokens(self, planner_template):
+        token_count = self.num_tokens_from_string(str(planner_template), "cl100k_base")  # Use appropriate encoding
+        print(f"Number of tokens: {token_count}")
 
-        # define the llms
-        self.hyde_llm, self.llm_primary_engineer, self.column_header_llm, self.planner_llm, self.follow_up_task_llm = self._define_llms_arr()
+    # clean up the temporary directory
+    @staticmethod
+    def temp_file_cleanup(temp_dir: str):
+        """clean up the temporary directory"""
+        temp_dir.cleanup()
 
-        # create the hyde prompt
-        self.hyde_prompt = PromptTemplate(
-            input_variables=["question"],
-            template="""You are an AI assistant tasked with generating a hypothetical document description that could answer the following question about data analysis:
+    # handle chat history with the user database
+    def get_chat_history_from_management(self, user_id: int, model_id: int, chat_id: int):
+        """Get and format the chat history from the chat history management."""
+        chat_hist_result = self.chat_history_management.get_chat_history(user_id=user_id, model_id=model_id, chat_id=chat_id)
 
-            {question}
+        # Check if there are any items in the chat history
+        if not chat_hist_result:
+            return '', ''
 
-            Provide a concise yet informative response that directly addresses the question. Your response should be written as if it were an excerpt from a relevant document or article describing a CSV file or dataset. Include details such as:
+        # Get the last item in the chat history
+        question, answer, _ = chat_hist_result[0]
 
-            1. The type of data the CSV might contain
-            2. Potential column names and their descriptions
-            3. The kind of analysis that could be performed with this data
+        # Return the last question and answer as a tuple
+        return question, answer
 
-            Your description should help in identifying the most relevant CSV files for this analysis question."""
-        )
+    def add_chat_history_to_management(self, user_id: int, model_id: int, chat_id: int, question_answer_pair: tuple) -> None:
+        """Add the chat history to the chat history management."""
+        print('question: ', question_answer_pair[0])
+        print('answer: ', question_answer_pair[1])
+        self.chat_history_management.save_message(user_id=user_id, model_id=model_id, chat_id=chat_id, question=question_answer_pair[0], answer=question_answer_pair[1])
 
-        # define the hyde chain
-        self.hyde_chain = LLMChain(llm=self.hyde_llm, prompt=self.hyde_prompt)
+    @staticmethod
+    def _get_dataframe_info(df: pd.DataFrame):
+        """
+        Get the DataFrame info as a string.
 
-        # define the streamed response
-        self.streamed_response: str = ''
+        This method captures the output of df.info() in a string buffer
+        instead of printing it to the console.
 
-    def _define_llms_arr(self):
-        """define the llms for the analytical model"""
+        Args:
+            df (pd.DataFrame): The DataFrame to get info from.
 
-        # create the llm for the csv analysis
-        llm = ChatOpenAI(model_name=self.data_loader.settings.csv_analysis_model,
-                         temperature=self.data_loader.settings.summary_temp,
-                         callbacks=[self.stream_handler])
+        Returns:
+            str: A string containing the DataFrame info.
+        """
+        # Create a string buffer to capture the output
+        buffer = StringIO()
 
-        # define llm for the primary analysis
-        llm_primary_engineer = ChatOpenAI(model_name=self.agent_llm_config.llm_primary_engineer_model,
-                                               temperature=self.agent_llm_config.llm_primary_engineer_temperature,
-                                               max_tokens=self.agent_llm_config.llm_primary_engineer_max_tokens,
-                                               callbacks=[self.stream_handler])
+        # Write the DataFrame info to the buffer instead of stdout
+        df.info(buf=buffer)
 
-        # check if the column header model is gpt-4o-mini so that we can use the same llm for the csv analysis and the column header model
-        if self.data_loader.settings.csv_analysis_model == 'gpt-4o-mini':
-            column_header_llm = llm
-        else:
-            # Initialize the LangChain ChatOpenAI model
-            column_header_llm = ChatOpenAI(model_name='gpt-4o-mini',
-                                           temperature=0,
-                                           openai_api_key=api_key,
-                                           callbacks=[self.stream_handler])
+        # Get the string value from the buffer and return it
+        return buffer.getvalue()
 
-        # define the planner llm as different model because of max tokens settings
-        planner_llm = ChatOpenAI(model_name=self.agent_llm_config.llm_planner_model,
-                                temperature=self.agent_llm_config.llm_planner_temperature,
-                                callbacks=[self.stream_handler])
+    def move_html_files_from_charts_to_reserves(self):
+        """Move html files from charts to reserves directory, overwriting existing files."""
 
-        # define the follow up task llm
-        follow_up_task_llm = ChatOpenAI(model_name=self.agent_llm_config.llm_follow_up_task_model,
-                                        temperature=self.agent_llm_config.llm_follow_up_task_temperature,
-                                        max_tokens=self.agent_llm_config.llm_follow_up_task_max_tokens,
-                                        callbacks=[self.stream_handler])
+        # Get the list of all html files in the charts directory
+        html_files = [f for f in os.listdir(self.data_loader.download_path_model.charts_path) if f.endswith('.html')]
 
-        return llm, llm_primary_engineer, column_header_llm, planner_llm, follow_up_task_llm
+        moved_files = []
+        for html_file in html_files:
+            source = Path(self.data_loader.download_path_model.charts_path) / html_file
+            dest = Path(self.data_loader.download_path_model.reserves_path) / html_file
 
-    def update_stream_url(self, new_url: str) -> None:
-        """Update the stream URL and reinitialize LLMs with new stream handler"""
-        self.stream_url = new_url
-        self.stream_handler.update_url(new_url)
-        #self._define_llms_arr() 
+            try:
+                # Remove destination file if it exists
+                if dest.exists():
+                    dest.unlink()
 
-    def _create_table_descriptions_retriever(self):
-        """Create the retriever for the LanceDB database table descriptions"""
+                shutil.move(str(source), str(dest))
+                moved_files.append(html_file)
 
-        # Define the reranker
-        reranker = LinearCombinationReranker(
-            weight=self.data_loader.settings.hybrid_search_ratio,
-        )
+            except Exception as e:
+                print(f"Error moving file '{html_file}': {str(e)}")
 
-        # Initialize the custom retriever object for the TABLE DESCRIPTIONS retriever
-        table_retriever = LanceTableRetriever(
-            table=self.data_loader.lancedb_client[3],
-            reranker=reranker,
-            k=self.data_loader.settings.k_top * self.data_loader.settings.k_tab_multiplier,  # Ensure k is set
-            mode='fts'  # Ensure mode is set
-        )
+        return moved_files
 
-        return table_retriever
+    def cleanup_files(self, file_names: list):
+        """
+        Delete specified files from the coding directory.
+
+        This method iterates through a list of file names or paths, attempts to delete
+        each file from the 'coding' directory, and provides feedback on the operation.
+
+        Args:
+            file_names (list): List of file names or file paths to be deleted.
+        """
+        for file_path in file_names:
+            # Extract the base name of the file (removes any directory path)
+            file_name = os.path.basename(file_path)
+
+            # Construct the full path to the file in the 'coding' directory
+            full_path = os.path.join(self.data_loader.download_path_model.coding_path, file_name)
+
+            # Check if the file exists at the constructed path
+            if os.path.exists(full_path):
+                try:
+                    # Attempt to remove the file
+                    os.remove(full_path)
+                    print(f"Deleted: {full_path}")
+                except Exception as e:
+                    # If an error occurs during deletion, print the error message
+                    print(f"Error deleting {full_path}: {str(e)}")
+            else:
+                # If the file doesn't exist, inform the user
+                print(f"File not found: {full_path}")
+
+    def html_to_byte_strings_in_directory(self, directory_path: str) -> list:
+        """
+        Convert all HTML files in a directory into a list of byte strings.
+
+        Args:
+            directory_path (str): The path to the directory containing HTML files.
+
+        Returns:
+            list: A list of byte string representations of the HTML files.
+        """
+        byte_strings = []
+        for file_name in os.listdir(directory_path):
+            if file_name.endswith('.html'):
+                file_path = os.path.join(directory_path, file_name)
+                with open(file_path, 'rb') as file:
+                    byte_strings.append(file.read())
+        return byte_strings
+
+    def remove_duplicates_from_csvs(self, charts_directory: str) -> None:
+        """
+        Find all CSV files in the specified directory and remove duplicate rows from each file.
+
+        Args:
+            charts_directory (str): Path to the directory containing CSV files
+        """
+        # Get list of all CSV files in directory
+        csv_files = [f for f in os.listdir(charts_directory) if f.endswith('.csv')]
+
+        # remove duplicates from the csv files
+        for csv_file in csv_files:
+            file_path = os.path.abspath(os.path.join(charts_directory, csv_file))
+            try:
+                # Read CSV file
+                df = pd.read_csv(file_path)
+
+                # Drop duplicates and overwrite file
+                df.drop_duplicates(inplace=True)
+                df.to_csv(file_path, index=False)
+
+            except Exception as e:
+                print(f"Error processing {csv_file}: {str(e)}")
+
+
+class AgentFileHandler(AgentGeneralTools):
+    """handle the file operations for the agent"""
+
+    def __init__(self):
+        """initialize the file handler"""
+
+        # initialize the general tools
+        super().__init__()
 
     def _process_csv_file_downloaded(self, file_name: str, renamed_headers: Dict[str, str], description: str) -> Dict[str, Any]:
         """
@@ -305,7 +430,7 @@ class AnalyticalModelRetrieverProcessing():
             try:
                 # Construct the correct file path
                 print(f"This is the filename inside _process_csv_file: {file_name}")
-                file_path = os.path.join(self.data_loader.download_path_model.coding_path, file_name)
+                file_path = self.data_loader.download_path_model.coding_path + '/' + file_name
                 print(f"This is the file path inside _process_csv_file: {file_path}")
 
                 # Check if the file exists
@@ -391,12 +516,230 @@ class AnalyticalModelRetrieverProcessing():
             'description': description
         }
 
+
+class AnalyticalModelRetrieverProcessing(AgentFileHandler):
+    """all the retriever functionality for the analytical model"""
+
+    # set the json mode to true
+    json_mode: bool = False # True
+    predownloaded_mode: bool = True
+
+    def __init__(self, stream_url: str = 'http://127.0.0.1:8005/stream'):
+        # create directory called coding and charting
+        os.makedirs("coding", exist_ok=True)
+
+        # set the stream url
+        self.stream_url = stream_url
+
+        # define the data loader and handle class inheritance
+        super().__init__()
+
+        # initialize the agent llm config
+        self.agent_llm_config = AgentLLMConfig()
+
+        # define the general settings
+        self.agent_general_settings = AgentGeneralSettings()
+
+        # define the k top
+        self.k = self.agent_llm_config.top_k_csv_files #self.data_loader.settings.top_k_csv_files
+
+        # create the lancedb retriever
+        self.table_descriptions_retriever = self._create_table_descriptions_retriever(k_top=self.k)
+
+        self.stream_handler = MyStreamHandler(url=self.stream_url, start_token="")
+
+        # define the llms
+        self.hyde_llm, self.llm_primary_engineer, self.column_header_llm, self.planner_llm, self.follow_up_task_llm = self._define_llms_arr()
+
+        # create the hyde prompt
+        self.hyde_prompt = PromptTemplate(
+            input_variables=["question"],
+            template="""You are an AI assistant tasked with generating a hypothetical document description that could answer the following question about data analysis:
+
+            {question}
+
+            Provide a concise yet informative response that directly addresses the question. Your response should be written as if it were an excerpt from a relevant document or article describing a CSV file or dataset. Include details such as:
+
+            1. The type of data the CSV might contain
+            2. Potential column names and their descriptions
+            3. The kind of analysis that could be performed with this data
+
+            Your description should help in identifying the most relevant CSV files for this analysis question."""
+        )
+
+        # define the hyde chain
+        self.hyde_chain = LLMChain(llm=self.hyde_llm, prompt=self.hyde_prompt)
+
+        # define the streamed response
+        self.streamed_response: str = ''
+
+        # define the index for specalized file management
+        self.index_specialized_file_management: dict = {1: self.specialized_file_management_db, 2: self.specialized_file_management}
+
+    def _define_llms_arr(self):
+        """define the llms for the analytical model"""
+        try:
+            if self.agent_llm_config.private_llm_mode:
+                os.environ["OPENAI_API_VERSION"] = "2024-02-01"
+                os.environ["AZURE_OPENAI_ENDPOINT"] = azure_endpoint
+                os.environ["AZURE_OPENAI_API_KEY"] = azure_api_key
+
+                # self.stream_handler = MyStreamHandler(url=self.stream_url, start_token="")
+
+                llm = AzureChatOpenAI(
+                    temperature=self.data_loader.settings.summary_temp,
+                    azure_deployment=self.agent_llm_config.model_deployment_name,
+                    # max_retries=2,
+                    max_tokens=self.agent_llm_config.llm_summary_max_tokens,
+                    callbacks=[self.stream_handler]
+                )
+            else:
+                # create the llm for the csv analysis
+                llm = ChatOpenAI(model_name=self.data_loader.settings.csv_analysis_model,
+                                temperature=self.data_loader.settings.summary_temp,
+                                #callbacks=[self.stream_handler]
+                                )
+
+        except:
+            raise Exception("Invalid API key provided")
+
+        # define llm for the primary analysis
+        try:
+            if self.agent_llm_config.private_llm_mode:
+                os.environ["OPENAI_API_VERSION"] = "2024-02-01"
+                os.environ["AZURE_OPENAI_ENDPOINT"] = azure_endpoint
+                os.environ["AZURE_OPENAI_API_KEY"] = azure_api_key
+
+                # self.stream_handler = MyStreamHandler(url=self.stream_url, start_token="")
+
+                # define the primary engineer llm
+                llm_primary_engineer = AzureChatOpenAI(
+                    temperature=self.agent_llm_config.llm_primary_engineer_temperature,
+                    azure_deployment=self.agent_llm_config.model_deployment_name,
+                    max_tokens=self.agent_llm_config.llm_primary_engineer_max_tokens,
+                    # max_retries=2,
+                    # max_tokens=self.model_specs.max_tokens,
+                    callbacks=[self.stream_handler]
+                )
+            else:
+                # define the engineer llm
+                llm_primary_engineer = ChatOpenAI(model_name=self.agent_llm_config.llm_primary_engineer_model,
+                                        temperature=self.agent_llm_config.llm_primary_engineer_temperature,
+                                        max_tokens=self.agent_llm_config.llm_primary_engineer_max_tokens,
+                                        #callbacks=[self.stream_handler]
+                                        )
+
+        except:
+            raise Exception("Invalid API key provided")
+
+        # check if the column header model is gpt-4o-mini so that we can use the same llm for the csv analysis and the column header model
+        if self.data_loader.settings.csv_analysis_model == 'gpt-4o-mini':
+            column_header_llm = llm
+        else:
+            # Initialize the LangChain ChatOpenAI model
+            try:
+                if self.agent_llm_config.private_llm_mode:
+                    os.environ["OPENAI_API_VERSION"] = "2024-02-01"
+                    os.environ["AZURE_OPENAI_ENDPOINT"] = azure_endpoint
+                    os.environ["AZURE_OPENAI_API_KEY"] = azure_api_key
+
+                    # self.stream_handler = MyStreamHandler(url=self.stream_url, start_token="")
+
+                    column_header_llm = AzureChatOpenAI(
+                        temperature=0,
+                        azure_deployment=self.agent_llm_config.model_deployment_name,
+                        # max_retries=2,
+                        max_tokens=100,
+                        callbacks=[self.stream_handler]
+                    )
+                else:
+                    # create the llm for the csv analysis
+                    column_header_llm = ChatOpenAI(model_name='gpt-4o-mini',
+                                                temperature=0,
+                                                openai_api_key=api_key,
+                                                #callbacks=[self.stream_handler]
+                                                )
+
+            except:
+                raise Exception("Invalid API key provided")
+
+        try:
+            if self.agent_llm_config.private_llm_mode:
+                os.environ["OPENAI_API_VERSION"] = "2024-02-01"
+                os.environ["AZURE_OPENAI_ENDPOINT"] = azure_endpoint
+                os.environ["AZURE_OPENAI_API_KEY"] = azure_api_key
+
+                # self.stream_handler = MyStreamHandler(url=self.stream_url, start_token="")
+
+                # define the planner llm
+                planner_llm = AzureChatOpenAI(
+                    temperature=self.agent_llm_config.llm_planner_temperature,
+                    azure_deployment=self.agent_llm_config.model_deployment_name,
+                    # max_retries=2,
+                    max_tokens=self.agent_llm_config.llm_planner_max_tokens,
+                    callbacks=[self.stream_handler]
+                )
+
+                # define the follow up task llm
+                follow_up_task_llm = AzureChatOpenAI(
+                    temperature=self.agent_llm_config.llm_follow_up_task_temperature,
+                    azure_deployment=self.agent_llm_config.model_deployment_name,
+                    max_tokens=self.agent_llm_config.llm_follow_up_task_max_tokens,
+                    # max_retries=2,
+                    callbacks=[self.stream_handler]
+                )
+
+            else:
+                # define the planner llm as different model because of max tokens settings
+                planner_llm = ChatOpenAI(model_name=self.agent_llm_config.llm_planner_model,
+                                        temperature=self.agent_llm_config.llm_planner_temperature,
+                                        #callbacks=[self.stream_handler]
+                                        )
+
+                # define the follow up task llm
+                follow_up_task_llm = ChatOpenAI(model_name=self.agent_llm_config.llm_follow_up_task_model,
+                                                temperature=self.agent_llm_config.llm_follow_up_task_temperature,
+                                                max_tokens=self.agent_llm_config.llm_follow_up_task_max_tokens,
+                                                #callbacks=[self.stream_handler]
+                                                )
+
+        except:
+            raise Exception("Invalid API key provided")
+
+
+        return llm, llm_primary_engineer, column_header_llm, planner_llm, follow_up_task_llm
+
+    def update_stream_url(self, new_url: str) -> None:
+        """Update the stream URL and reinitialize LLMs with new stream handler"""
+        self.stream_url = new_url
+        self.stream_handler.update_url(new_url)
+        #self._define_llms_arr()
+
+    def _create_table_descriptions_retriever(self, k_top: int = None):
+        """Create the retriever for the LanceDB database table descriptions"""
+
+        # Define the reranker
+        reranker = LinearCombinationReranker(
+            weight=self.data_loader.settings.hybrid_search_ratio,
+        )
+
+        # Initialize the custom retriever object for the TABLE DESCRIPTIONS retriever
+        table_retriever = LanceTableRetriever(
+            table=self.data_loader.lancedb_client[3],
+            reranker=reranker,
+            k=k_top if k_top is not None else self.data_loader.settings.k_top * self.data_loader.settings.k_tab_multiplier,  # Ensure k is set
+            mode='fts'  # Ensure mode is set
+        )
+        print(table_retriever)
+
+        return table_retriever
+
     # return pandas dataframes as a list of dictionaries
-    def fetch_relevant_tables(self, query: str, k: int = 3) -> List[Dict[str, Any]]:
+    def fetch_relevant_tables(self, query: str) -> List[Dict[str, Any]]:
         """Fetch the relevant tables for the query"""
 
         # Use the custom table descriptions retriever and select to always use tabular data (True returns an empty list)
-        relevant_docs = self.table_descriptions_retriever.get_relevant_documents(query, disable_tabular=False)
+        relevant_docs = self.table_descriptions_retriever.get_relevant_documents(query, disable_tabular=False)[:self.k]
 
         results = []
         for doc in relevant_docs:  # Iterate through each relevant document
@@ -435,97 +778,8 @@ class AnalyticalModelRetrieverProcessing():
 
         self.streamed_response += "Identified the following relevant files: " + str(results) + "\n"
         self.streamed_response +=  "-----------------------------------------\n"
-        print(self.streamed_response)
+        #print(self.streamed_response)
         return results
-
-    def _define_charting_prompt(self, file_info, user_question: str) -> str:
-        """define the charting prompt for the agent"""
-
-        file_details = "\n".join([
-            f"- File: {info['file_name']}"
-            f"\n  Original headers: {', '.join(info['original_headers'])}"
-            f"\n  Renamed headers: {', '.join(info['renamed_headers'].values())}"
-            for info in file_info
-        ])
-
-        prompt = f"""
-            Write a Python script to visualize data from the following CSV file(s):
-            {file_details}
-
-            Address the user's question: "{user_question}"
-
-            Execute the script to generate an appropriate graph. Follow these guidelines:
-
-            1. Use the following libraries: matplotlib with aquarel.
-            2. Implement the 'artic_dark' theme from aquarel for a visually appealing graph.
-            3. Read the CSV file(s) and determine the most suitable graph type based on both the data and the user's question.
-            4. Create a clear and informative graph with proper labels, titles, and a legend (if applicable).
-            5. Use the renamed headers for labels and legends, but refer to the original headers when reading the CSV file(s).
-            6. Include error handling for file reading and data processing.
-            7. Save the graph as a high-resolution PNG file with a descriptive name.
-
-            Ensure the code is well-commented and follows Python best practices. After generating the graph, display it and explain how the visualization answers the user's question.
-            """
-
-        return prompt
-
-    def _define_data_analysis_prompt(self, file_info, user_question: str) -> str:
-        """Define the data analysis prompt for the agent tailored for autogen agent."""
-
-        file_details = "\n".join([
-            f"- File: {info['file_name']}"
-            f"\n  Original headers: {', '.join(info['original_headers']) if info['original_headers'] else 'None'}"
-            f"\n  Renamed headers: {', '.join(info['renamed_headers'].values()) if info['renamed_headers'] else 'None'}"
-            for info in file_info
-        ])
-
-        prompt = f"""
-            You are an expert data analyst and Python programmer acting as an autonomous agent.
-
-            Your task is to write a **complete and executable Python script** to analyze data from the following CSV file(s):
-            {file_details}
-
-            **User's Question:**
-            "{user_question}"
-
-            **Instructions:**
-
-            1. **Read the CSV file(s) using relative paths** within the `'coding'` directory.
-            2. Use appropriate Python libraries for data manipulation and analysis (e.g., `pandas`, `numpy`).
-            3. For visualizations, you may use `matplotlib` with `aquarel`, `plotly`, `seaborn`, or other suitable libraries.
-            4. **Determine the most suitable output format** (tables, charts, computations) based on the data and the user's question.
-            5. Include **error handling** for file reading and data processing.
-            6. **Save all generated outputs** (graphs, tables, etc.) **within the `'coding'` directory** using descriptive filenames.
-            7. Use the **renamed headers for any labels and legends**, but refer to the original headers when reading the CSV file(s).
-            8. Write **clear and concise code with comments** explaining each step.
-            9. **Do not include any code that requires user interaction or input**; the script should run autonomously.
-            10. After **running the script**, provide a **summary of the findings** and explain how they answer the user's question within the code comments or as printed output.
-            11. Ensure your code **does not access external resources or require internet connectivity**.
-            12. All file paths should be relative and point to files within the `'coding'` directory.
-
-            **Important Notes:**
-
-            - **Ensure your code is fully executable and follows Python best practices**.
-            - **Do not include any placeholder code**; provide the full implementation.
-            - The code should be suitable for execution by an autogen agent with no modifications.
-            - **Output all results within the script**; do not produce any separate explanatory text.
-
-            **Output Format:**
-
-            - Provide the **complete Python script** in a **single code block**.
-            - Do not include any additional text or explanations outside the code block.
-            - Start the code block with ```python and do not specify a file path.
-
-            **Example Code Block Format:**
-
-            \`\`\`python
-            # Your Python script here
-            \`\`\`
-
-            Ensure your script meets all the above requirements and is ready to be executed as is.
-            """
-
-        return prompt
 
     def generate_hypothetical_document(self, question: str) -> str:
         """Generate a hypothetical document description based on the question."""
@@ -588,36 +842,7 @@ class AnalyticalModelRetrieverProcessing():
         # Return the query as a single-item list to maintain compatibility with existing code
         return query.strip()
 
-    def facade_chart_prompt(self, user_question: str) -> str:
-        """Facade method to retrieve relevant tables and create the charting prompt"""
-
-        # Step 1: Fetch relevant tables
-        relevant_tables = self.fetch_relevant_tables(user_question)
-
-        # Step 2: Generate the charting prompt
-        charting_prompt = self._define_charting_prompt(relevant_tables, user_question)
-
-        return charting_prompt
-
-    def facade(self, user_question: str, context_mode: bool = True) -> str:
-        """Facade method to retrieve relevant tables and create the data analysis prompt"""
-
-        # If context mode is true, create the user queries
-        if context_mode:
-            # Create the user queries
-            user_queries = self.create_user_queries(self.chat_history)
-        else:
-            # If context mode is false, use the user question
-            user_queries = user_question
-
-        # Fetch relevant tables based on the user queries
-        relevant_tables = self.fetch_relevant_tables(user_queries)
-
-        # Generate the data analysis prompt using the new method
-        data_analysis_prompt = self._define_data_analysis_prompt(relevant_tables, user_queries)
-
-        return data_analysis_prompt
-
+    # WITHOUT using postgres database to store CSV files
     def specialized_file_management(self, user_question: str, **kwargs) -> List[list]:
         """The main method to call the class which also downloads"""
 
@@ -658,21 +883,103 @@ class AnalyticalModelRetrieverProcessing():
                     file_paths.append(f'{self.data_loader.download_path_model.coding_path}/{file_name}')
                 except Exception as e:
                     raise Exception(f"Error downloading file '{file_name}': {str(e)}")
-                
+
             # return the relevant tables and file paths as a list of dictionaries
             return [relevant_tables, file_paths]
 
-    def move_html_files_from_coding_to_plots(self):
-        """move the html files from the coding directory to the plots directory"""
+    # WITH using postgres database to store CSV files
+    def specialized_file_management_db(self, user_question: str, **kwargs) -> List[list]:
+        """
+        Alternative version of specialized_file_management that uses database retrieval
+        instead of file downloads.
 
-        # get the list of all html files in the coding directory
-        html_files = [f for f in os.listdir(self.data_loader.download_path_model.coding_path) if f.endswith('.html')]
+        Args:
+            user_question (str): The user's question to analyze
+            **kwargs: Additional arguments, may include 'file_name'
 
-        # move the html files to the plots directory
-        for html_file in html_files:
-            shutil.move(f'{self.data_loader.download_path_model.coding_path}/{html_file}', f'{self.data_loader.download_path_model.charts_path}/')
+        Returns:
+            List[list]: A list containing [relevant_tables, file_paths]
+        """
 
-        return html_files
+        # Handle single file case
+        file_name = kwargs.get('file_name', None)
+        if file_name is not None:
+            try:
+                # Retrieve single file from database
+                df = self.data_loader.csv_db_handler.retrieve_csv(
+                    table_name=self.data_loader.storage_settings.csv_db_table_name,
+                    name=f'{self.data_loader.download_path_model.table_path}/{file_name}',
+                    output_path=f'{self.data_loader.download_path_model.coding_path}/{file_name}'
+                )
+
+                # Process the dataframe
+                processed_result = self._process_csv_file_downloaded(df, {}, '')
+                return [[processed_result], [f'/{file_name}']]
+
+            except Exception as e:
+                raise Exception(f"Error retrieving file '{file_name}' from database: {str(e)}")
+
+        # Handle multiple files case
+        else:
+            # Fetch relevant tables based on the user question
+            relevant_tables: list = self.fetch_relevant_tables(user_question)
+            print('len of relevant tables: ', len(relevant_tables))
+
+            if not relevant_tables:
+                raise Exception("No relevant files found for the given question.")
+
+            try:
+                # Extract file names from relevant_tables
+                file_names = [table['file_name'] for table in relevant_tables]
+
+                # Create file paths (virtual paths since we're not actually downloading)
+                file_paths_retrieval = [f'{self.data_loader.download_path_model.table_path}/{name}'
+                            for name in file_names]
+
+                # create the file paths for the output
+                file_paths = [f'{self.data_loader.download_path_model.coding_path}/{name}'
+                            for name in file_names]
+
+                # Use the database handler to retrieve dataframes
+                dataframes = self.data_loader.csv_db_handler.retrieve_multiple_csv(
+                    table_name=self.data_loader.storage_settings.csv_db_table_name,
+                    file_names=file_paths_retrieval,
+                    output_paths=file_paths
+                )
+
+                # Update relevant_tables with the retrieved dataframes
+                processed_results = []
+                for file_name, dataframe in dataframes.items():
+                    #processed_result = self._process_csv_file_downloaded(dataframe, {}, '')
+                    processed_results.append(dataframe)
+                return [processed_results, file_paths]
+
+            except Exception as e:
+                raise Exception(f"Error retrieving files from database: {str(e)}")
+
+    def search_metadata_by_filename(self, file_name: str) -> bool:
+        """
+        Search the LanceDB database for a file name in the source metadata field.
+
+        Args:
+            file_name (str): The file name/path to search for
+
+        Returns:
+            bool: True if file is found in database, False otherwise
+        """
+        try:
+            # Get the table from LanceDB client
+            table = self.data_loader.lancedb_client[3]
+
+            # Search the source field in metadata for the file name
+            results = table.search().where(f"source = '{file_name}'").to_list()
+
+            # Return True if any results found, False otherwise
+            return len(results) > 0
+
+        except Exception as e:
+            print(f"Error searching metadata: {str(e)}")
+            return False
 
 
 class AgentUtilities(AnalyticalModelRetrieverProcessing):
@@ -682,304 +989,19 @@ class AgentUtilities(AnalyticalModelRetrieverProcessing):
         super().__init__(stream_url)
 
         # define the system messages and engineer planner prompts
-        self.system_msg_engineer, self.system_msg_planner = self._create_engineer_planner_prompts()
-
-        # define the model selection
-        self.config_list_gpt4o, self.config_list_gpt4o_mini, self.config_list_claude = self._llm_model_selection()
+        self.system_msg_engineer, self.system_msg_planner, \
+            self.system_msg_critic, self.system_msg_summary, self.system_msg_question_enhancer, self.system_msg_debugger = system_msg_engineer, system_msg_planner, system_msg_critic, system_msg_summary, system_msg_question_enhancer, system_msg_debugger
 
         # define the structured output
-        self.code_output_model: CodeOutput = CodeOutput
+        self.code_output_model = CodeOutput
 
         # number of columns after filtering
         self.number_columns_after_filtering = 15
 
-        # select the language model from the configuration list for autogen usage (different formatting)
-        self.selected_analytics_model = self.config_list_gpt4o[0]
+        # column threshold - this is the size of the spreadsheet beyond which we need column filtering
+        self.column_threshold = 200
 
-        # path to save the file 
-        self.chart_save_path = self.agent_llm_config.chart_save_path
-
-        # define the chat history management
-        self.chat_history_management = ChatHistoryManagement()
-
-    def get_chat_history_from_management(self, user_id: int, model_id: int, chat_id: int):
-        """Get and format the chat history from the chat history management."""
-        chat_hist_result = self.chat_history_management.get_chat_history(user_id=user_id, model_id=model_id, chat_id=chat_id)
-        
-        # Check if there are any items in the chat history
-        if not chat_hist_result:
-            return '', ''
-        
-        # Get the last item in the chat history
-        question, answer, _ = chat_hist_result[0]
-        
-        # Return the last question and answer as a tuple
-        return question, answer
-
-    def add_chat_history_to_management(self, user_id: int, model_id: int, chat_id: int, question_answer_pair: tuple) -> None:
-        """Add the chat history to the chat history management."""
-        print('question: ', question_answer_pair[0])
-        print('answer: ', question_answer_pair[1])
-        self.chat_history_management.save_message(user_id=user_id, model_id=model_id, chat_id=chat_id, question=question_answer_pair[0], answer=question_answer_pair[1])
-
-    @staticmethod
-    def num_tokens_from_string(string: str, encoding_name: str) -> int:
-        encoding = tiktoken.get_encoding(encoding_name)
-        num_tokens = len(encoding.encode(string))
-        return num_tokens
-
-    def count_tokens(self, planner_template):
-        token_count = self.num_tokens_from_string(str(planner_template), "cl100k_base")  # Use appropriate encoding
-        print(f"Number of tokens: {token_count}")
-
-    def _create_agents(self, question: str):
-        """create the agents for the group chat"""
-
-        # Create user proxy agent
-        user_proxy = autogen.UserProxyAgent(
-            name="Admin",
-            system_message="A human admin",
-            code_execution_config=False,
-            human_input_mode="NEVER",
-            default_auto_reply="",
-            is_termination_msg=lambda x: x.get("content", "").find("TERMINATE") >= 0,
-        )
-
-        # Create engineer agent
-        engineer = autogen.AssistantAgent(
-            name="Engineer",
-            llm_config=self.selected_analytics_model,
-            system_message='You are the engineer. Your job is to make edits to the code. Fix all the errors that the critic suggests. Implement the suggestions of the critic but do not change the rest of the code.',
-        )
-
-        # Create code executor agent
-        code_executor = autogen.UserProxyAgent(
-            name="Executor",
-            # system_message="You are the Executor. Execute the code written by the engineer and report the result.",
-            system_message="You are the Executor. Execute the code written by the engineer and report the result.",
-            human_input_mode="NEVER",
-            code_execution_config={
-              "last_n_messages": 2,
-              "work_dir": "coding",
-              "use_docker": False
-            },
-        )
-
-        # Create critic agent
-        critic = autogen.AssistantAgent(
-            name="Critic",
-            system_message=f"""
-            You are the Critic. Your task is to evaluate the code based on two criteria:
-            1. Does the code run without any errors?
-            2. Does the code directly address the user's question: "{question}"?
-
-            If both criteria are met, respond with "TERMINATE".
-            If either criterion is not met, respond with 1-2 sentences of what to change. If there are errors, restate the error message.
-            Provide no other commentary or explanation.
-            """,
-            llm_config=self.selected_analytics_model,
-        )
-
-        # create the group chat
-        groupchat = autogen.GroupChat(
-            agents=[code_executor, critic, user_proxy, engineer],
-            messages=[],
-            max_round=2,
-            speaker_selection_method="round_robin",
-        )
-
-        # create the manager
-        manager = autogen.GroupChatManager(
-            groupchat=groupchat,
-            llm_config=self.selected_analytics_model
-        )
-
-        return manager, user_proxy
-
-    @staticmethod
-    def temp_file_cleanup(temp_dir: str):
-        """clean up the temporary directory"""
-        temp_dir.cleanup()
-
-    @staticmethod
-    def _create_engineer_planner_prompts():
-        """create the engineer planner prompts"""
-
-        # System messages
-        system_msg_engineer = """
-        Engineer. You write python/bash to retrieve relevant information. Wrap the code in a code block that specifies the script type. The user can't modify your code. So do not suggest incomplete code which requires others to modify. Don't use a code block if it's not intended to be executed by the executor.
-        Do not include code comments. Don't include multiple code blocks in one response. Do not ask others to copy and paste the result. Check the execution result returned by the executor.
-        If the result indicates there is an error, fix the error and output the code again. Suggest the full code instead of partial code or code changes. If the error can't be fixed or if the task is not solved even after the code is executed successfully, analyze the problem, revisit your assumption, collect additional info you need, and think of a different approach to try.
-        Make sure to use plotly and make the graphs look very good with lots of detail and a modern template. Make sure to download the file after you are done in the /coding directory.
-        """
-
-        system_msg_planner = """
-        You are the Planner. Your role is to decompose the user's question into specific subtasks and provide clear instructions for the coding agent to execute.
-
-        **Instructions:**
-
-        1. Restate the user's question.
-        2. Break down the task into 3-5 subtasks.
-        3. For each subtask, provide explicit instructions, including:
-           - Data retrieval and cleaning steps
-           - Calculations to be performed
-           - Visualizations to be created (if applicable)
-           - File paths for saving outputs
-        4. Specify that all calculation results should be printed to the console.
-        5. If visualizations are required, instruct to save all plots as HTML files.
-        6. For complex questions, ensure all important numbers are printed and all charts are saved.
-
-        **Output Format:**
-
-        Question: [Restate the user's question]
-
-        Subtasks:
-        1. [Subtask 1]
-           - Instructions: [Detailed steps]
-           - Output: [Specify console output or file path]
-
-        2. [Subtask 2]
-           - Instructions: [Detailed steps]
-           - Output: [Specify console output or file path]
-
-        3. [Subtask 3]
-           - Instructions: [Detailed steps]
-           - Output: [Specify console output or file path]
-
-        [Add more subtasks as needed]
-
-        Additional Notes:
-        - Use Plotly for all visualizations with modern templates.
-        - Ensure proper labeling, titles, and legends for all charts.
-        - Save all data files in the 'data/' directory.
-        - Save all plot files in the 'plots/' directory.
-
-        Your goal is to provide a clear, step-by-step plan that the coding agent can follow to effectively answer the user's question.
-        """
-        return system_msg_engineer, system_msg_planner
-
-    @staticmethod
-    def _llm_model_selection():
-        """select the llm model"""
-        config_list_gpt4 = [
-            {
-                "model": "gpt-4o",
-                "api_key": api_key,
-                "api_type": "openai",
-            }
-        ]
-        config_list_gpt4_mini = [
-            {
-                "model": "gpt-4o-mini",
-                "api_key": api_key,
-                "api_type": "openai",
-            }
-        ]
-        config_list_claude = [
-            {
-                "model": "claude-2",
-                "api_key": claude_api_key,
-                "api_type": "anthropic",
-                "temperature": 0.1,
-            }
-        ]
-        return config_list_gpt4, config_list_gpt4_mini, config_list_claude
-
-    def define_task_template(self):
-        """Create the task template for the planner agent, supporting multiple dataframes"""
-
-        # define the types of charts that can be created
-        plotly_charts = {
-            "Scatter Plot": "Use to visualize relationships between two continuous variables, like correlations or trends.",
-            "Line Plot": "Ideal for showing trends over time or continuous data, such as stock prices or time series data.",
-            "Bar Chart": "Use to compare categorical data or show distribution for discrete variables, such as sales by region.",
-            "Histogram": "Best for displaying the distribution of a single continuous variable, such as frequency distributions.",
-            "Box Plot": "Use to show data spread and detect outliers, especially when comparing groups or categories.",
-            "Violin Plot": "Good for visualizing data distributions with added density information, particularly for comparing categories.",
-            "Pie Chart": "Useful for visualizing proportions or parts of a whole, such as market share breakdowns.",
-            "Sunburst Chart": "Best for hierarchical data visualization where categories are nested, like organizational structures.",
-            "Treemap": "Great for visualizing hierarchical data with relative sizes, such as budget breakdowns or part-to-whole relationships.",
-            "Funnel Chart": "Use to visualize stages in a process, such as sales pipelines or drop-off rates in conversions.",
-            "Density Heatmap": "Helpful for visualizing data density in two dimensions, identifying patterns or clusters.",
-            "Contour Plot": "Good for visualizing continuous data with contour lines, such as showing regions of high concentration.",
-            "Bubble Chart": "Useful for comparing three variables at once, where the third variable is represented by bubble size.",
-            "Polar Chart": "Best for displaying data in a radial coordinate system, such as directional or cyclical data.",
-            "Radar Chart": "Ideal for comparing multiple variables for several entities, such as benchmarking performance metrics.",
-            "Area Chart": "Similar to a line plot, use to show cumulative data over time, like total sales or stock volume.",
-            "Bubble Map": "Great for geographical scatter plots where bubble size represents data, such as population by region.",
-            "Choropleth Map": "Use to visualize values over geographic regions, such as GDP or population density across countries.",
-            "3D Scatter Plot": "Useful for plotting relationships between three continuous variables in a 3D space.",
-            "3D Surface Plot": "Best for visualizing complex three-dimensional surfaces, such as terrain or mathematical functions.",
-            "Waterfall Chart": "Ideal for showing the cumulative effect of sequential values, such as profit and loss breakdowns."
-        }
-
-        # Define the task template
-        planner_template = """
-        You are the Planner. Your role is to decompose the user's question into specific subtasks and provide clear instructions for the coding agent to execute.
-
-        **Instructions:**
-
-        1. Restate the user's question.
-        2. Break down the task into 4-6 subtasks, including data cleaning as a specific task.
-        3. For each subtask, provide explicit instructions, including:
-        - Data retrieval steps
-        - Data cleaning and preprocessing steps
-        - Articulate what to do with NaN values. Sometime we can drop them, sometimes we can fill them with the mean, median, or mode. You must make this decision based on the data provided and user question.
-        - Calculations to be performed
-        - Visualizations to be created (if applicable)
-        - File paths for saving outputs
-        4. Specify that all calculation results should be printed to the console.
-        5. If visualizations are required, instruct to save all plots as HTML files.
-        6. When you choose a chart, make sure you pay attention to the type of data you are working with. You need to make sure that when you plot the data it will look good on the chart and be informative.
-
-        **Output Format:**
-
-        Question: {question}
-
-        Available Dataframes:
-        {dataframes_info}
-
-        Relevant Columns Across All Dataframes:
-        {relevant_columns}
-
-        Subtasks:
-        1. Data Retrieval and Integration (if multiple dataframes)
-        - Instructions: [Detailed steps for retrieving and potentially merging the necessary data]
-        - Output: [Specify console output]
-
-        2. Data Cleaning and Preprocessing
-        - Instructions:
-          - Perform all cleaning operations in-memory without saving any new files
-          - Handle NaN values appropriately (e.g., drop, fill with mean/median/mode, or use a specific value)
-          - Convert data types if necessary
-          - Remove duplicates if any
-          - Handle outliers if present
-          - [Any other specific cleaning steps based on the data]
-        - Output: Print a summary of cleaning actions taken to the console
-
-        3. [Subtask 3]
-        - Instructions: [Detailed steps]
-        - Output: [Specify console output or file path for visualizations only]
-
-        4. [Subtask 4]
-        - Instructions: [Detailed steps]
-        - Output: [Specify console output or file path for visualizations only]
-
-        [Add more subtasks as needed]
-
-        Additional Notes:
-        - Use Plotly for all visualizations with modern templates.
-        - Create two Plotly charts for the task, one of which can be a Plotly table. You can choose from the options below:
-        {plotly_charts}
-        - Ensure proper labeling, titles, and legends for all charts.
-        - Do not save any intermediate data files. All data processing should be done in-memory.
-        - Save only the final visualization plots as HTML files in the {output_directory} directory.
-
-        Your goal is to provide a clear, step-by-step plan that the coding agent can follow to effectively answer the user's question, while ensuring all data cleaning and processing is done in-memory without creating new files.
-        """
-        return planner_template, plotly_charts
-
-    def call_llm(self, df, question):
+    def llm_column_filtering(self, df, question):
         """call the language model to get the relevant columns"""
 
         # Get the list of column names from the DataFrame
@@ -1005,7 +1027,7 @@ class AgentUtilities(AnalyticalModelRetrieverProcessing):
         messages = [HumanMessage(content=content)]
 
         # Use the LLM to generate the response
-        response = self.column_header_llm.invoke(messages)  
+        response = self.column_header_llm.invoke(messages)
 
         # Extract the assistant's reply
         assistant_reply = response.content.strip()
@@ -1015,8 +1037,8 @@ class AgentUtilities(AnalyticalModelRetrieverProcessing):
             relevant_columns = ast.literal_eval(assistant_reply)
             return relevant_columns, columns
         except:
-            try:    
-                # call the response agan 
+            try:
+                # call the response agan
                 response = self.column_header_llm([HumanMessage(content=prompt)])
                 assistant_reply = response.content.strip()
                 relevant_columns = ast.literal_eval(assistant_reply)
@@ -1024,43 +1046,23 @@ class AgentUtilities(AnalyticalModelRetrieverProcessing):
             except:
                 raise ValueError("Failed to parse the assistant's reply into a Python list.")
 
-    @staticmethod
-    def _get_dataframe_info(df: pd.DataFrame):
-        """
-        Get the DataFrame info as a string.
+    def get_relevant_columns_with_lm_singular(self, question, file_path: str, df: pd.DataFrame = None, postgres_mode: bool = True):
+        # read the pandas dataframe from the file information
+        if not postgres_mode:
+            df = pd.read_csv(file_path)
 
-        This method captures the output of df.info() in a string buffer
-        instead of printing it to the console.
-
-        Args:
-            df (pd.DataFrame): The DataFrame to get info from.
-
-        Returns:
-            str: A string containing the DataFrame info.
-        """
-        # Create a string buffer to capture the output
-        buffer = StringIO()
-
-        # Write the DataFrame info to the buffer instead of stdout
-        df.info(buf=buffer)
-
-        # Get the string value from the buffer and return it
-        return buffer.getvalue()
-
-    def get_relevant_columns_with_lm_singular(self, question, file_path: str = None):
-        # read the pandas dataframe from the file
-        df = pd.read_csv(file_path)
+        # find the condition for column filtering
+        column_filtering_condition = df.shape[1] < self.column_threshold
 
         # add a condition if the dataframe is smaller than 50 columns then just use the original dataframe
-        if df.shape[1] < 50:
+        if column_filtering_condition:
             relevant_columns = df.columns.tolist()
-            return relevant_columns, df, df.head(5), self._get_dataframe_info(df)
+            return relevant_columns, df, df.head(3), self._get_dataframe_info(df)
 
         # get the relevant columns
-        relevant_columns, columns = self.call_llm(df, question)
+        relevant_columns, columns = self.llm_column_filtering(df, question)
         self.streamed_response += "Identified the following relevant columns: " + str(relevant_columns) + "\n"
         self.streamed_response +=  "-----------------------------------------\n"
-        print(self.streamed_response)
 
         # If a column does not exist, use cosine similarity to find the closest matching column
         valid_columns = []
@@ -1079,18 +1081,23 @@ class AgentUtilities(AnalyticalModelRetrieverProcessing):
         subset_df = df[valid_columns]
 
         # save the new dataframe
-        self.save_dataframe(subset_df, filename=file_path) # specify a file name in general
+        if column_filtering_condition:
+            self.save_dataframe(subset_df, filename=file_path) # specify a file name in general
 
         # generate the dataframe info and description
         return valid_columns, subset_df, subset_df.head(10), str(subset_df.describe()) #self._get_dataframe_info(subset_df)
 
-    def get_relevant_columns_with_lm(self, question, file_names: list):
+    def get_relevant_columns_with_lm(self, question, file_paths: list = None, dataframes: list = None, postgres_mode: bool = True):
         """get the relevant columns with the language model for multiple files"""
 
         # implement concurrent.futures to call the function for each file name
-        with ThreadPoolExecutor(max_workers=len(file_names)) as executor:
+        with ThreadPoolExecutor(max_workers=len(file_paths)) as executor:
             # map the function to the file names
-            results = list(executor.map(self.get_relevant_columns_with_lm_singular, [question] * len(file_names), file_names))
+            results = list(executor.map(self.get_relevant_columns_with_lm_singular,
+                                    [question] * len(file_paths),
+                                    file_paths,
+                                    dataframes,
+                                    [postgres_mode] * len(file_paths)))
 
         # combine the results by category
         relevant_columns_all = []
@@ -1145,101 +1152,6 @@ class AgentUtilities(AnalyticalModelRetrieverProcessing):
         print(f"DataFrame saved to {filename}")
         return filename
 
-    def _modify_file_paths_aide_code(self, code: str) -> str:
-        """
-        Modify the file paths in the aide code to use the correct path.
-
-        Args:
-            code (str): The original code string from AIDE.
-
-        Returns:
-            str: The modified code string with updated file paths.
-        """
-        # Define the regex pattern to match file paths
-        pattern = r'(?:\.\/working\/|\.\/|\/working\/)([^\'"\s]+\.[^\'"\s]+)'
-
-        # Define the replacement function
-        def replace_path(match):
-            filename = match.group(1)
-            return f"'{self.data_loader.download_path_model.coding_path}/{filename}'"
-
-        # Use regex to replace all matching file paths
-        modified_code = re.sub(pattern, replace_path, code)
-
-        return modified_code
-
-    # Function to display images
-    def display_images_from_directory(self, directory):
-        # This function displays all images in the specified directory
-        for filename in os.listdir(directory):
-            if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff')):
-                # Full path to the image file
-                img_path = os.path.join(directory, filename)
-                # Display the image
-                print(f"Displaying image: {img_path}")
-                display(Image(filename=img_path))
-
-    def get_agent_history(self, agent):
-        """
-        Retrieve the chat history for a specific agent.
-
-        Args:
-            agent (ConversableAgent): The agent whose chat history we want to retrieve.
-
-        Returns:
-            List[Dict]: A list of message dictionaries representing the chat history.
-        """
-        if not hasattr(agent, 'chat_messages'):
-            return []
-
-        # Create a copy of the chat messages to avoid modifying the original
-        messages = agent.chat_messages
-
-        # Flatten the nested dictionaries if necessary
-        flattened_messages = []
-        for recipient, message_list in messages.items():
-            for message in message_list:
-                flattened_message = {
-                    'sender': agent.name,
-                    'recipient': recipient,
-                    'content': message['content'],
-                    'role': message['role']
-                }
-                flattened_messages.append(flattened_message)
-
-        return flattened_messages
-
-    @staticmethod
-    def cleanup_files(file_names: list):
-        """
-        Delete specified files from the coding directory.
-
-        This method iterates through a list of file names or paths, attempts to delete
-        each file from the 'coding' directory, and provides feedback on the operation.
-
-        Args:
-            file_names (list): List of file names or file paths to be deleted.
-        """
-        for file_path in file_names:
-            # Extract the base name of the file (removes any directory path)
-            file_name = os.path.basename(file_path)
-
-            # Construct the full path to the file in the 'coding' directory
-            full_path = os.path.join('coding', file_name)
-
-            # Check if the file exists at the constructed path
-            if os.path.exists(full_path):
-                try:
-                    # Attempt to remove the file
-                    os.remove(full_path)
-                    print(f"Deleted: {full_path}")
-                except Exception as e:
-                    # If an error occurs during deletion, print the error message
-                    print(f"Error deleting {full_path}: {str(e)}")
-            else:
-                # If the file doesn't exist, inform the user
-                print(f"File not found: {full_path}")
-
     def clean_chat_history(self, chat_history: List[Dict]) -> List[Dict]:
         """
         Clean up the chat history by removing messages that are blank or do not contain code.
@@ -1270,35 +1182,47 @@ class AgentUtilities(AnalyticalModelRetrieverProcessing):
         # Return the list of cleaned messages
         return cleaned_history
 
-    def get_agent_history_from_history(self, agent: ConversableAgent, chat_history: List[Dict]) -> List[Dict]:
+    def clean_coding_directory(self, file_paths: list):
         """
-        Retrieve the chat messages specific to a given agent from the provided chat history.
-
-        This method filters the chat history to include only messages from the specified agent,
-        excluding any empty or whitespace-only messages.
+        Remove specified files from the coding directory
 
         Args:
-            agent (ConversableAgent): The agent whose messages we want to extract.
-            chat_history (List[Dict]): The cleaned chat history, containing messages from all agents.
-
-        Returns:
-            List[Dict]: A list of non-empty messages sent by the specified agent.
+            file_paths: List of file paths to remove
         """
-        agent_messages = []  # Initialize an empty list to store the agent's messages
+        coding_dir = self.data_loader.download_path_model.coding_path
+        if not os.path.exists(coding_dir):
+            return
 
-        # Iterate through each message in the chat history
-        for message in chat_history:
-            # Check if the message is from the specified agent
-            if message.get('name') == agent.name:
-                # Extract the content of the message, defaulting to an empty string if not present
-                content = message.get('content', '').strip()
+        for file_path in file_paths:
+            # Get just the filename from the full path
+            filename = os.path.basename(file_path)
+            full_path = os.path.join(coding_dir, filename)
 
-                # Only include non-empty messages
-                if content:
-                    agent_messages.append(message)
+            # Remove file if it exists
+            if os.path.exists(full_path):
+                try:
+                    os.remove(full_path)
+                    print(f"Removed file: {filename}")
+                except Exception as e:
+                    print(f"Error removing file {filename}: {str(e)}")
+            else:
+                print(f"File not found: {filename}")
 
-        # Return the list of messages from the specified agent
-        return agent_messages
+    def create_dataframe_information(self, file_paths: list, dataframes_infos: list, dataframes_heads: list):
+        """create the dataframe info"""
+
+        # Prepare relevant_columns_info
+        relevant_columns_info = "\n".join([f"{file}: {', '.join(df.columns)}" for file, df in zip(file_paths, dataframes_heads)])
+
+        # Prepare dataframes_info
+        dataframes_info = ""
+        for file_path, _, df_head in zip(file_paths, dataframes_infos, dataframes_heads):
+            dataframes_info += f"File Path: {file_path}\n"
+            dataframes_info += f"Dataframe Column Names:\n{df_head.columns.tolist()}\n\n"
+            #dataframes_info += f"Dataframe Info:\n{df_info}\n\n"
+            dataframes_info += f"Dataframe Head:\n{df_head.to_string()}\n\n"
+
+        return dataframes_info, relevant_columns_info
 
 
 class ProcessAgentResponse(AgentUtilities):
@@ -1440,11 +1364,11 @@ class AgentState(TypedDict):
 class ConstructAgentGraph(AgentUtilities):
     """class to construct the agent graph"""
 
-    # conditional mode 
+    # conditional mode
     conditional_mode = True
 
-    # define if code should run task decomposition or not 
-    run_task_decomposition: bool = True
+    # define if code should run task decomposition or not
+    run_task_decomposition: bool = False
 
     def __init__(self, stream_url: str):
         super().__init__(stream_url)
@@ -1466,20 +1390,20 @@ class ConstructAgentGraph(AgentUtilities):
             'question': ''
         }
 
-        # define the model id 
+        # define the model id
         self.model_id: int = 2
 
     def _process_streamed_response(self, response: str) -> str:
         """Process the streamed response to display chunks cleanly
-        
+
         Args:
             response (str): Raw streamed response
-            
+
         Returns:
             str: Complete concatenated response
         """
-        
-        # local response 
+
+        # local response
         local_response: str = ''
 
         # Process each chunk
@@ -1490,103 +1414,12 @@ class ConstructAgentGraph(AgentUtilities):
             # add the chunk content to the streamed response both globally and locally
             self.streamed_response += chunk_content
             local_response += chunk_content
-            
+
             # Print only the new content
             if chunk_content.strip():  # Only print if there's content after stripping whitespace
                 print(chunk_content, end='', flush=True)  # Use end='' to avoid extra newlines
-        
+
         return local_response
-    
-    def _define_initial_code_generation_prompt(self, question: str, dataframes_info: str, relevant_columns: List[str]):
-        """define the initial code generation prompt"""
-
-        # define the types of charts that can be created
-        plotly_charts = {
-            "Scatter Plot": "Use to visualize relationships between two continuous variables, like correlations or trends.",
-            "Line Plot": "Ideal for showing trends over time or continuous data, such as stock prices or time series data.",
-            "Bar Chart": "Use to compare categorical data or show distribution for discrete variables, such as sales by region.",
-            "Histogram": "Best for displaying the distribution of a single continuous variable, such as frequency distributions.",
-            "Box Plot": "Use to show data spread and detect outliers, especially when comparing groups or categories.",
-            "Violin Plot": "Good for visualizing data distributions with added density information, particularly for comparing categories.",
-            "Pie Chart": "Useful for visualizing proportions or parts of a whole, such as market share breakdowns.",
-            "Sunburst Chart": "Best for hierarchical data visualization where categories are nested, like organizational structures.",
-            "Treemap": "Great for visualizing hierarchical data with relative sizes, such as budget breakdowns or part-to-whole relationships.",
-            "Funnel Chart": "Use to visualize stages in a process, such as sales pipelines or drop-off rates in conversions.",
-            "Density Heatmap": "Helpful for visualizing data density in two dimensions, identifying patterns or clusters.",
-            "Contour Plot": "Good for visualizing continuous data with contour lines, such as showing regions of high concentration.",
-            "Bubble Chart": "Useful for comparing three variables at once, where the third variable is represented by bubble size.",
-            "Polar Chart": "Best for displaying data in a radial coordinate system, such as directional or cyclical data.",
-            "Radar Chart": "Ideal for comparing multiple variables for several entities, such as benchmarking performance metrics.",
-            "Area Chart": "Similar to a line plot, use to show cumulative data over time, like total sales or stock volume.",
-            "Bubble Map": "Great for geographical scatter plots where bubble size represents data, such as population by region.",
-            "Choropleth Map": "Use to visualize values over geographic regions, such as GDP or population density across countries.",
-            "3D Scatter Plot": "Useful for plotting relationships between three continuous variables in a 3D space.",
-            "3D Surface Plot": "Best for visualizing complex three-dimensional surfaces, such as terrain or mathematical functions.",
-            "Waterfall Chart": "Ideal for showing the cumulative effect of sequential values, such as profit and loss breakdowns."
-        }
-
-        # define the simplified task prompt if task decomposition is not run
-        simplified_planner_template = f"""
-            You are the Planner. Decompose the user's question into subtasks and provide instructions for execution.
-
-            Question: {question}
-
-            Dataframes Info: {dataframes_info}
-
-            Relevant Columns: {relevant_columns}
-
-            Choose the correct chart type from the following options:
-            {plotly_charts}
-
-            Instructions:
-            1. Retrieve and integrate data.
-            2. Clean data of NaN values, deal with outliers effectively, and handle missing values.
-            3. Perform calculations and print all numerical results.
-            4. Create Plotly visualizations with a modern template.
-            5. Save all charts as HTML files in /root/BizEval/coding/.
-            6. When you choose a chart, make sure you pay attention to the type of data you are working with. You need to make sure that when you plot the data it will look good on the chart and be informative.
-
-            Use Plotly for all visualizations. Ensure proper labeling and legends. Read this prompt twice before proceeding.
-            """
-        return simplified_planner_template
-
-    @staticmethod
-    def display_graph(graph):
-        """
-        Display the agent graph as a Mermaid diagram.
-
-        This method attempts to visualize the graph structure using Mermaid.
-        It's designed to work in Jupyter notebook environments.
-
-        Args:
-            graph: The graph object to be displayed. Expected to have a get_graph() method
-                   that returns an object with a draw_mermaid_png() method.
-        """
-        try:
-            # Generate a PNG image of the Mermaid diagram
-            mermaid_png = graph.get_graph().draw_mermaid_png()
-
-            # Display the PNG image in the notebook
-            # This requires IPython's display and Image functions to be available
-            display(Image(mermaid_png))
-        except Exception as e:
-            # Catch any exceptions that occur during the process
-            # This could include AttributeError if the graph methods are missing,
-            # or other errors related to image generation or display
-            print(f"Error displaying graph: {e}")
-
-    @staticmethod
-    def router(state):
-        # This is the router
-        messages = state["messages"]
-        last_message = messages[-1]
-        if last_message.tool_calls:
-            # The previous agent is invoking a tool
-            return "call_tool"
-        if "TERMINATE" in last_message.content:
-            # Any agent decided the work is done
-            return END
-        return "continue"
 
     def critic_router(self, state):
         """route for the critic"""
@@ -1595,7 +1428,7 @@ class ConstructAgentGraph(AgentUtilities):
         messages = state["messages"]
         if self.conditional_mode:
             last_message = messages[-1][-1]
-        else: 
+        else:
             last_message = messages[-1]
         if "TERMINATE" in last_message:
             # Any agent decided the work is done
@@ -1604,27 +1437,20 @@ class ConstructAgentGraph(AgentUtilities):
 
     def _create_task_decomposition_call(self, question: str, dataframes_infos: List[str], dataframes_heads: List[pd.DataFrame], relevant_columns: List[List[str]], file_paths: list):
         """Create the task decomposition call for the planner"""
-       
-        # Prepare dataframes_info
-        dataframes_info = ""
-        for file_path, df_info, df_head in zip(file_paths, dataframes_infos, dataframes_heads):
-            dataframes_info += f"File Path: {file_path}\n"
-            dataframes_info += f"Dataframe Info:\n{df_info}\n\n"
-            dataframes_info += f"Dataframe Head:\n{df_head.to_string()}\n\n"
+
+        # create the dataframe information
+        dataframes_info = self.create_dataframe_information(file_paths, dataframes_infos, dataframes_heads)
 
         # Prepare relevant_columns_info
-        relevant_columns_info = "\n".join([f"{file}: {', '.join(cols)}" for file, cols in zip(file_paths, relevant_columns)])
+        relevant_columns_info = "\n".join([f"{file}: {', '.join(df.columns)}" for file, df in zip(file_paths, dataframes_heads)])
 
-        # define the content messages container 
+        # define the content messages container
         content: list = []
 
-        # Get the planner template
-        planner_template, plotly_charts = self.define_task_template()
-
-        # fill in the planner template 
-        planner_template = planner_template.format(question=question, dataframes_info=dataframes_info, relevant_columns=relevant_columns_info, plotly_charts=plotly_charts, output_directory=self.chart_save_path)
+        # fill in the planner template
+        planner_template = self.system_msg_planner.format(question=question, dataframes_info=dataframes_info, relevant_columns=relevant_columns_info, plotly_charts=self.agent_general_settings.plotly_charts, output_directory=self.agent_llm_config.file_save_path)
         content.append({"type": "text", "text": planner_template})
-        
+
         # define the human message
         messages = [HumanMessage(content)]
 
@@ -1636,49 +1462,27 @@ class ConstructAgentGraph(AgentUtilities):
 
         return self._process_streamed_response(planner_response), dataframes_info, relevant_columns_info
 
-    def create_first_draft_code_node(self, question: str):
-        """create the first draft code agent"""
-
-        # Define the task
-        task, file_names, agent_prompt, task_breakdown = self._create_prompt(question)
-
-        # execute the code
-        code_execution_result = self.execute_code(agent_prompt)
-        return agent_prompt, code_execution_result, task
-
-    def create_first_draft_code_node_modified(self, question: str, manual_mode: bool = True, image_input: str = ''):
-        """create the first draft code agent"""
-        starter_code, file_paths, agent_prompt, task, dataframes_info, relevant_columns_info = self._create_prompt(question, image_input)
-        
-        if manual_mode: 
-            # call the llm directly and get the response
-            return agent_prompt, dataframes_info
-        else: 
-            first_draft_agent = self.create_agent_wrapper(self.llm_primary_engineer,
-                                                        [self.execute_code],
-                                                        system_message=agent_prompt)
-
-            first_draft_node = functools.partial(self.agent_node, agent=first_draft_agent, name="First Draft Agent")
-
-            return first_draft_node
-
     def _create_prompt(self, query: str, image_input: str = ''):
         """create the LLM prompt - identify the correct file as well"""
 
         # get the correct file to use
         start_time = time.time()
-        _, file_paths = self.specialized_file_management(query, file_name=self.specific_file_name)
-        print('file paths:', file_paths)
+        dataframes, file_paths = self.index_specialized_file_management[self.agent_llm_config.csv_file_manager](query, file_name=self.specific_file_name)
         end_time = time.time()
         print(f"Time taken to fetch file paths from inside create_prompt: {end_time - start_time} seconds")
 
         # extract the relevant columns from the
-        relevant_columns, _, subset_df_head_list, subset_df_info_list = self.get_relevant_columns_with_lm(query, file_names=file_paths)
+        relevant_columns, _, subset_df_head_list, subset_df_info_list = self.get_relevant_columns_with_lm(
+            question=query,
+            file_paths=file_paths,
+            dataframes=dataframes,
+            postgres_mode=self.data_loader.settings.postgres_mode
+        )
 
         # Call _create_task_decomposition_call with correct arguments
         if self.run_task_decomposition:
             start_time = time.time()
-            task, dataframes_info, relevant_columns_info = self._create_task_decomposition_call(
+            task, dataframes_info, dataframe_columns = self._create_task_decomposition_call(
                 question=query,
                 dataframes_infos=subset_df_info_list,
                 dataframes_heads=subset_df_head_list,
@@ -1687,59 +1491,33 @@ class ConstructAgentGraph(AgentUtilities):
             )
             end_time = time.time()
             print(f"Time taken to create task: {end_time - start_time} seconds")
-        else: 
-            task = self._define_initial_code_generation_prompt(query, dataframes_info, relevant_columns)
-            task = task.format(question=query, dataframes_info=dataframes_info, relevant_columns=relevant_columns_info)
+        else:
+            dataframes_info, dataframe_columns = self.create_dataframe_information(file_paths, subset_df_info_list, subset_df_head_list)
+            task = query
 
-        # call the starter code function
-        start_time = time.time()
-        starter_code = self._generate_starter_code_llm(task, image_input) # generate the code using the AIDE library: self._generate_starter_code_aide(prompt)
-        end_time = time.time()
-        print(f"Time taken to generate starter code: {end_time - start_time} seconds")
+        return task, dataframes_info, dataframe_columns, file_paths
 
-        # define the prompt to use
-        agent_prompt = f"""
-        User Question: {query}
-
-        File(s) used: {', '.join(file_paths)}
-
-        Starter Code in Python:
-        {starter_code}
-        """
-
-        return starter_code, file_paths, agent_prompt, task, dataframes_info, relevant_columns_info
-
-    def _generate_starter_code_llm(self, prompt: str, image_input: str = None):
+    def initial_code_generation_node(self, prompt: str, dataframes_info: str, dataframe_columns: list, image_input: str = None):
         """
         Generate the starter code using the LLM with support for text and image inputs.
-        
+
         Args:
             prompt (str): The text prompt for code generation
+            dataframes_info (str): The dataframes information
             image_input (str, optional): Base64 encoded image string
         """
 
         # define the content of the prompt
         content: list = []
 
-        try:
-
+        if True:
             # Create the system message
-            system_message = f"""You are a Python coding assistant. Follow this task.
-            Generate code based on the given prompt and image if provided.
-            Ensure the code is executable and syntax is correct.
-            Make sure to use the same file paths from the task when importing data.
-            Ensure any code you provide can be executed with all required imports and variables defined.
-            Do not include code comments.
-            Return only the python code at the end. No additional text or comments."""
+            message = self.system_msg_engineer.format(task=prompt, dataframes_info=dataframes_info,
+                                                      code_directory_path=self.agent_llm_config.file_save_path)
+            # add the prompt to the content
+            content.append({"type": "text", "text": message})
 
-
-            # add the system message to the content  
-            content.append({"type": "text", "text": system_message})
-
-            # add the prompt to the content  
-            content.append({"type": "text", "text": prompt})
-
-            # add the image to the content  
+            # add the image to the content
             if image_input:
                 content.append({
                     "type": "image_url",
@@ -1748,7 +1526,7 @@ class ConstructAgentGraph(AgentUtilities):
 
             # create the human message
             message = [HumanMessage(content)]
-            
+
             # Print token count for monitoring
             print('input token count code generation:')
             self.count_tokens(str(message))
@@ -1758,44 +1536,25 @@ class ConstructAgentGraph(AgentUtilities):
 
             return self._process_streamed_response(response)
 
-        except Exception as e:
-            print(f"Error generating code: {str(e)}")
-            return None
+        #except Exception as e:
+        #    print(f"Error generating code: {str(e)}")
+        #    return None
 
-    def run_graph(self, agent_prompt, graph):
-        """
-        Run the constructed agent graph with the given prompt.
+    def create_first_draft_code_node_modified(self, question: str, manual_mode: bool = True, image_input: str = ''):
+        """create the first draft code agent"""
+        task, dataframes_info, dataframe_columns, file_paths = self._create_prompt(question, image_input)
 
-        Args:
-            agent_prompt (str): The user's query or instruction to be processed by the graph.
+        if manual_mode:
+            # call the llm directly and get the response
+            return self.initial_code_generation_node(task, dataframes_info, dataframe_columns, image_input), dataframes_info, file_paths
+        else:
+            first_draft_agent = self.create_agent_wrapper(self.llm_primary_engineer,
+                                                        [self.execute_code],
+                                                        system_message=task)
 
-        This method streams the events from the graph execution and prints each step.
-        """
-        # # Ensure the graph is compiled before running
-        # if not hasattr(self, 'compiled_graph'):
-        #     raise AttributeError("Graph has not been compiled. Call define_graph() first.")
+            first_draft_node = functools.partial(self.agent_node, agent=first_draft_agent, name="First Draft Agent")
 
-        # Create the initial state with the user's prompt
-        initial_state = {
-            "messages": [
-                HumanMessage(content=agent_prompt)
-            ],
-        }
-        print('initial state is created: ', initial_state)
-        # Stream the events from the graph execution
-        events = graph.stream(
-            initial_state,
-            # Maximum number of steps to take in the graph
-            {"recursion_limit": 150},
-        )
-
-        # Print each event in the stream
-        print("\n\n")
-        for event in events:
-            print(event)
-            print("----")
-
-        # Note: You might want to return something here, like a summary or final state
+            return first_draft_node
 
     def get_previous_chat_history(self):
         """
@@ -1816,10 +1575,10 @@ class ConstructAgentGraph(AgentUtilities):
     def follow_up_task_router(self, state):
         """router for the follow up task"""
 
-        # define the reference message 
+        # define the reference message
         if self.conditional_mode:
             reference_message = state['messages'][-1][-1]
-        else: 
+        else:
             reference_message = state['messages']
 
         if  'yes' in reference_message.lower():
@@ -1829,64 +1588,10 @@ class ConstructAgentGraph(AgentUtilities):
             # Any agent decided the work is done
             return 'call_draft_code'
 
-    def _update_state_variables(self, question: str, code_output: str, critic_feedback: str, current_code: str) -> None:
-        """update the state variables"""
-
-        # update the state variables
-        self.state_variables['code_execution_output'] = code_output
-        self.state_variables['critic_feedback'] = critic_feedback
-        self.state_variables['current_code'] = current_code
-        self.state_variables['question'] = question
-        return
-
-    # Helper function to create a node for a given agent
-    def agent_node(self, state, agent, name):
-        result = agent.invoke(state)
-        # We convert the agent output into a format that is suitable to append to the global state
-        if isinstance(result, ToolMessage):
-            pass
-        else:
-            result = AIMessage(**result.dict(exclude={"type", "name"}), name=name)
-        return {
-            "messages": [result],
-            # Since we have a strict workflow, we can
-            # track the sender so we know who to pass to next.
-            "sender": name,
-        }
-
-    def create_agent_wrapper(self,llm, tools, system_message: str):
-        """Create an agent."""
-        prompt = ChatPromptTemplate.from_messages(
-            [
-                (
-                    "system",
-                    "You are a helpful AI assistant, collaborating with other assistants."
-                    " Use the provided tools to progress towards answering the question."
-                    " If you are unable to fully answer, that's OK, another assistant with different tools "
-                    " will help where you left off. Execute what you can to make progress."
-                    " If you or any of the other assistants have the final answer or deliverable,"
-                    " prefix your response with TERMINATE so the team knows to stop."
-                    " You have access to the following tools: {tool_names}.\n{system_message}",
-                ),
-                MessagesPlaceholder(variable_name="messages"),
-            ]
-        )
-        prompt = prompt.partial(system_message=system_message)
-        print("tools\n", tools)
-        # prompt = prompt.partial(tool_names=", ".join([tool.name for tool in tools]))
-
-        prompt = prompt.partial(tool_names=", ".join([getattr(tool, 'name', f"Tool{i}") for i, tool in enumerate(tools)]))
-
-        # prompt = prompt.partial(tool_names="execute_code")
-
-        # prompt = prompt.partial(tool_names="")
-        return prompt | llm.bind_tools(tools)
-
     def _parse_code_execution_response(self, response: str):
-        """parse the code execution response"""
+        """parse the code execution response and remove warnings from output"""
 
         # Parse the response
-        # content = response.get('content', '')
         content = response
         lines = content.split('\n')
 
@@ -1894,11 +1599,30 @@ class ConstructAgentGraph(AgentUtilities):
         code_output = ''
         error_message = ''
 
+        # Process lines for code output, removing warnings
+        output_lines = []
+        warning_line = False
+
         for line in lines:
             if line.startswith('exitcode:'):
                 execution_status = 'success' if 'execution succeeded' in line else 'failed'
             elif line.startswith('Code output:'):
-                code_output = '\n'.join(lines[lines.index(line)+1:])
+                # Get all lines after 'Code output:'
+                output_section = lines[lines.index(line)+1:]
+
+                # Filter out warning lines
+                for out_line in output_section:
+                    # Skip lines containing warnings
+                    if any(warn in out_line for warn in ['Warning:', 'FutureWarning:', 'UserWarning:', 'DeprecationWarning:']):
+                        continue
+                    # Skip lines that are continuations of warnings (usually indented)
+                    if out_line.startswith('  ') and warning_line:
+                        continue
+                    # Reset warning line flag and keep the line
+                    warning_line = False
+                    output_lines.append(out_line)
+
+                code_output = '\n'.join(line for line in output_lines if line.strip())
                 break
 
         if execution_status == 'failed':
@@ -1933,43 +1657,39 @@ class ConstructAgentGraph(AgentUtilities):
 
         return self._parse_code_execution_response(response)
 
+    def create_enhanced_question_node(self, question: Annotated[str, "The user's question"]):
+        """create a function that enhances a user's question when it is unclear"""
+
+        # define the prompt
+        content: list = []
+        content.append({
+            "type": "text",
+            "text": self.system_msg_question_enhancer.format(
+                question=question,
+                industry=self.data_loader.sector_settings.company_sector,
+                business_description=self.data_loader.sector_settings.company_description
+            )
+        })
+
+        # define the messages
+        messages = [HumanMessage(content)]
+
+        # call the llm directly and get the response
+        response = self.follow_up_task_llm.stream(messages)
+        return self._process_streamed_response(response)
+
     @tool
     def code_executor_tool(self, starter_code: Annotated[str, "The starter code to execute"]):
         """tool to execute code"""
         return self.execute_code(starter_code)
 
-    def dummy_tool(self):
-        """dummy tool"""
-        return None
-
     def create_critic_node(self, question: str, code_output: Annotated[str, "The code output to critique"], starter_code: Annotated[str, "The starter code to execute"], dataframes_info: Annotated[str, "The dataframes info"], manual_mode: bool = True):
         """create the critic agent"""
 
-        critic_prompt: str = """
-            You are the Critic. Your task is to evaluate the code based on two criteria:
-            1. Does the code run without any errors?
-            2. Are the charts in the code informative and useful? Do the numerical outputs make sense?
-            3. Does the code directly address the user's question: "{question}"?
-            4. Are all the charts and tables being saved to the output directory /root/BizEval/coding/
-
-            For reference to the data, here is the dataframes info used to create the code:
-            {dataframes_info}
-
-            If all criteria are met, respond with "TERMINATE". You ignore warnings generated by the code. 
-            If either criterion is not met, respond with 1-2 sentences of what to change. If there are errors, restate the error message.
-            Provide no other commentary or explanation.
-
-            Here is the code output:
-            {code_output}
-
-            Here is the code:
-            {starter_code}
-        """
-
-        if manual_mode: 
-            # define the content 
+        if manual_mode:
+            # define the content
             content: list = []
-            content.append({"type": "text", "text": critic_prompt.format(question=question, code_output=code_output, starter_code=starter_code, dataframes_info=dataframes_info)})
+            content.append({"type": "text", "text": self.system_msg_critic.format(question=question, code_output=code_output, starter_code=starter_code, dataframes_info=dataframes_info, code_directory_path=self.agent_llm_config.output_save_path)})
 
             # define the messages
             messages = [HumanMessage(content)]
@@ -1977,66 +1697,36 @@ class ConstructAgentGraph(AgentUtilities):
             # call the llm directly and get the response
             response = self.llm_primary_engineer.stream(messages)
             return self._process_streamed_response(response)
-        else: 
+        else:
             # create the agent
-            critic_agent = self.create_agent_wrapper(self.llm_primary_engineer, [self.dummy_tool], system_message=critic_prompt.format(question=question, code_output=code_output, starter_code=starter_code, dataframes_info=dataframes_info))
+            critic_agent = self.create_agent_wrapper(self.llm_primary_engineer, [self.dummy_tool], system_message=self.system_msg_critic.format(question=question, code_output=code_output, starter_code=starter_code, dataframes_info=dataframes_info))
             critic_node = functools.partial(self.agent_node, agent=critic_agent, name="Critic")
 
             return critic_node
 
-    def create_code_engineer_node(self, question: str,
+    def create_code_engineer_node(self, task: str,
                                    critic_feedback: Annotated[str, "The feedback from the critic"],
                                    code_output: Annotated[str, "The code output to critique"],
-                                   starter_code: Annotated[str, "The starter code to execute"], 
+                                   starter_code: Annotated[str, "The starter code to execute"],
                                    dataframes_info: Annotated[str, "The dataframes info"],
                                    manual_mode: bool = True):
         """create the code engineer agent"""
 
-        # create the prompt
-        code_engineer_prompt: str = """
-        You are a Python Code Engineer. Your task is to fix bugs and implement changes suggested by the Critic. Focus on:
 
-        1. Addressing the Critic's feedback directly.
-        2. Fixing any errors or bugs in the code.
-        3. Ensuring the code runs without errors and answers the user's question.
-
-        Original Code:
-        {starter_code}
-
-        Critic's Feedback:
-        {critic_feedback}
-
-        Here is the info on the dataframes used to create the code:
-        {dataframes_info}
-
-        Code Output in Console:
-        {code_output}
-
-        User's Original Question:
-        {question}
-
-        Provide only the updated code that addresses the Critic's feedback and fixes any errors. Do not include explanations or comments unless absolutely necessary for understanding a complex change.
-
-        Updated Code:
-        ```python
-        [Your updated code here]
-        ```
-        """
-
-        if manual_mode: 
-            # define the content 
+        if manual_mode:
+            # define the content
             content: list = []
-            content.append({"type": "text", "text": code_engineer_prompt.format(question=question, critic_feedback=critic_feedback, code_output=code_output, starter_code=starter_code, dataframes_info=dataframes_info)})
+            content.append({"type": "text", "text": self.system_msg_debugger.format(task=task, critic_feedback=critic_feedback, code_output=code_output, starter_code=starter_code, dataframes_info=dataframes_info, code_directory_path=self.agent_llm_config.output_save_path)})
 
-            # define the messages   
+            # define the messages
             messages = [HumanMessage(content)]
 
             # call the llm directly and get the response
             response = self.llm_primary_engineer.stream(messages)
             return self._process_streamed_response(response)
-        else: 
+        else:
             # create the agent
-            code_engineer_agent = self.create_agent_wrapper(self.llm_primary_engineer, [self.execute_code], system_message=code_engineer_prompt.format(question=question, critic_feedback=critic_feedback, code_output=code_output, starter_code=starter_code, dataframes_info=dataframes_info))
+            code_engineer_agent = self.create_agent_wrapper(self.llm_primary_engineer, [self.execute_code], system_message=self.system_msg_debugger.format(task=task, critic_feedback=critic_feedback, code_output=code_output, starter_code=starter_code, dataframes_info=dataframes_info))
             engineer_node = functools.partial(self.agent_node, agent=code_engineer_agent, name="Code Engineer")
 
             return engineer_node
@@ -2044,7 +1734,7 @@ class ConstructAgentGraph(AgentUtilities):
     def create_followup_code_node(self, question: str, starter_code: str, dataframes_info: Annotated[str, "The dataframes info"], manual_mode: bool = True, image_input: str = ''):
         """
         Create the draft started code agent with support for image inputs.
-        
+
         Args:
             question (str): User's follow-up question
             starter_code (str): Previous code to modify
@@ -2054,10 +1744,10 @@ class ConstructAgentGraph(AgentUtilities):
         """
 
 
-        # define the content    
+        # define the content
         content: list = []
 
-        # add the system message first 
+        # add the system message first
         content.append({"type": "text", "text": """You are a Python Code Engineer. Your task is to implement changes based on the user's question and image if provided. Focus on:
                 1. Addressing the user's question directly.
                 2. Fixing any errors or bugs in the code.
@@ -2067,8 +1757,8 @@ class ConstructAgentGraph(AgentUtilities):
                 6. Make sure to save them files to the output directory as a HTML file
                 7. When editing an existing chart, make sure to save the edited chart to the same file path and overwrite the old chart.
                 8. Select which dataframes to use. Only use the dataframes provided to you below."""})
-        
-        # add the human message 
+
+        # add the human message
         content.append({"type": "text", "text": f"""Previous Code:
                 {starter_code}
 
@@ -2090,7 +1780,7 @@ class ConstructAgentGraph(AgentUtilities):
             )
 
         # define the messages
-        messages = [HumanMessage(content)]  
+        messages = [HumanMessage(content)]
 
         if manual_mode:
             # Direct invocation of LLM with messages
@@ -2121,101 +1811,36 @@ class ConstructAgentGraph(AgentUtilities):
         3. The question references or builds upon the previous results
         4. The question is asking for more details about the previous analysis
         5. The question is asking to modify visualization aspects of the previous code
-        
+
         Current Question: {question}
         Previous Question: {previous_question}
         Previous Code: {previous_code}
 
         Output only YES or NO. No explanation needed.
         """
-        
+
         if manual_mode:
             # call the llm directly and get the response
             response = self.follow_up_task_llm.invoke(follow_up_task_prompt.format(question=question, previous_question=previous_question, previous_code=previous_code))
             return response.content
-        else: 
+        else:
             # create the agent
             follow_up_task_agent = self.create_agent_wrapper(self.follow_up_task_llm, [self.dummy_tool], system_message=follow_up_task_prompt.format(previous_code=previous_code, previous_question=previous_question, question=question))
             follow_up_task_node = functools.partial(self.agent_node, agent=follow_up_task_agent, name="Follow Up Task")
 
             return follow_up_task_node
 
-    def create_summary_node(self, question: str, output: dict) -> str:
-        """Explain the model output by providing a short summary of what the final code does."""
-        print(output['code_output'])
-        # Create messages list with separated code and output
-        messages = [
-            SystemMessage(
-                content="""You are an AI assistant tasked with summarizing and interpreting code results. Focus on:
-                1. Citing specific numerical values and statistics from the output
-                2. Explaining what these numbers mean in context
-                3. Highlighting key patterns or relationships found
-                4. Keeping explanations clear and concise (3-4 sentences)"""
-            ),
-            HumanMessage(
-                content=f"""Question Asked: {question}
-
-                Code Generated:
-                {output.get('code', '')}
-
-                Code Results:
-                {output.get('code_output', '')}
-
-                Please provide a summary that:
-                1. References specific numbers from the analysis (e.g., "the correlation coefficient of 0.75 indicates...")
-                2. Explains what the calculations show about the data
-                3. Interprets any visualizations or charts created
-                4. Highlights key insights using actual values from the results
-
-                Keep your response focused on the numerical findings and their interpretation."""
-            )
-        ]
-
-        # Get response from LLM
-        response = self.hyde_llm.invoke(messages)
-        return response.content
-
     def create_summary_node_modified(self, question: str, output: dict, manual_mode: bool = True) -> str:
         """Explain the model output by providing a short summary of what the final code does."""
-
-        # Create the prompt
-        prompt = """
-                **User's Question:**
-                {question}
-
-                **Generated Code**
-                {code}
-             
-                **Code Output**
-                {code_output}
-
-                Please provide:
-                1. A brief summary of what the code does and how it addresses the user's question.
-                2. An interpretation of the results, including what any numerical outputs (like 0-5 scales) might mean in context.
-                3. A thoughtful analysis of the results, highlighting key insights or patterns.
-                4. Any potential limitations or considerations about the analysis.
-                5. Make sure to mention specific numerical results from the coding output
-
-                In your response:
-                - Use plain language and avoid technical jargon.
-                - Emphasize the main functionalities and key findings.
-                - Provide context for any scales or metrics used (e.g., what a score of 3 out of 5 might indicate).
-                - Offer insights that go beyond just restating the numbers.
-                - If applicable, suggest potential implications or next steps based on the results.
-
-                Note: Your response needs to be maximum 3 sentences long and includes the most relevant information.
-
-                Your explanation should be analytical and educational, helping the user understand the results and how it relates to their question. 
-            """
 
         # define the content
         content: list = []
 
-        # add the system message first 
+        # add the system message first
         content.append({"type": "text", "text": """You are an AI assistant tasked with summarizing and interpreting the final code and its results that were generated to answer the user's question. Your goal is to provide a clear, concise, and insightful analysis that a non-technical audience can understand."""})
 
-        # add the human message 
-        content.append({"type": "text", "text": prompt.format(question=question, code=output['code'], code_output=output['code_output'])})
+        # add the human message
+        content.append({"type": "text", "text": self.system_msg_summary.format(question=question, code=output['code'], code_output=output['code_output'])})
 
         # define the messages
         messages = [HumanMessage(content)]
@@ -2224,11 +1849,11 @@ class ConstructAgentGraph(AgentUtilities):
             # call the llm directly and get the response
             response = self.hyde_llm.stream(messages)
             return self._process_streamed_response(response)
-        else: 
+        else:
             # create the agent
             summary_node_agent = self.create_agent_wrapper(self.hyde_llm,
                                                         [self.dummy_tool],
-                                                        system_message=prompt.format(question=question,
+                                                        system_message=self.system_msg_summary.format(question=question,
                                                                                         code=output['code'],
                                                                                         code_output=output['code_output']))
 
@@ -2237,117 +1862,6 @@ class ConstructAgentGraph(AgentUtilities):
                                             name="Summary Node Agent")
 
             return summary_node
-
-    def define_graph(self, question: str, code_output: str, starter_code: str, previous_question: str, display_graph: bool = True):
-        """define the nodes for the graph"""
-
-        # update the state variables
-        self._update_state_variables(question=question, code_output=code_output, critic_feedback='', current_code=starter_code)
-
-        # define the tool node
-        tool_node = ToolNode([self.code_executor_tool])
-
-        # define the critic node
-        critic_node, engineer_node = self.create_critic_node(question=question, code_output=code_output, starter_code=starter_code), self.create_code_engineer_node(question=question,
-                                                                                                                                                                    code_output=code_output,
-                                                                                                                                                                    starter_code=starter_code,
-                                                                                                                                                                    critic_feedback='')
-
-        # define the follow up task node
-        follow_up_task_node = self.create_follow_up_task_decision_node(question=question, previous_question=previous_question)
-
-        # define the draft started code node
-        followup_code_node = self.create_followup_code_node(question=question, starter_code=starter_code)
-
-        # define the first draft code node
-        first_draft_code_node = self.create_first_draft_code_node_fixed(question=question)
-
-        # define the summary node
-        summary_node = self.create_summary_node_fixed(question=question, output=code_output)
-
-        # define the graph
-        self.graph_builder.add_node("first_draft_code", first_draft_code_node)
-        self.graph_builder.add_node("follow_up_task", follow_up_task_node)
-        self.graph_builder.add_node("code_execution", tool_node)
-        self.graph_builder.add_node("critic", critic_node)
-        self.graph_builder.add_node("engineer", engineer_node)
-        self.graph_builder.add_node("followup_code", followup_code_node)
-        self.graph_builder.add_node("summary", summary_node)
-
-        # Change: Start with follow_up_task node
-        self.graph_builder.add_edge(START, 'follow_up_task')
-
-        # define the edge from follow up task to draft started code
-        self.graph_builder.add_conditional_edges(
-            'follow_up_task',
-            self.router,
-            {'call_draft_code': 'first_draft_code', 'call_edit': 'followup_code'}
-        )
-
-        # define the edge from the call edit to the code execution
-        self.graph_builder.add_conditional_edges(
-            'followup_code',
-            self.router,
-            {'continue': 'critic', 'call_tool': 'code_execution', END: END}
-        )
-
-        # define the edge from first draft code to follow up code
-        self.graph_builder.add_conditional_edges(
-            'first_draft_code',
-            self.router,
-            {'continue': 'critic', END: END}
-        )
-
-        # define the starting edge from code execution to critic
-        self.graph_builder.add_conditional_edges(
-            'critic',
-            self.critic_router,
-            {'continue': 'engineer', 'call_tool': 'code_execution', 'summary_exit': 'summary', END: END} # this should not be using a tool
-        )
-
-        # define the edge from summary to end
-        self.graph_builder.add_conditional_edges(
-            'summary',
-            self.router,
-            {'continue': END, END: END}
-        )
-
-        # define the edge from engineer to code execution
-        self.graph_builder.add_conditional_edges(
-            'engineer',
-            self.router,
-            {'continue': 'critic', 'call_tool': 'code_execution', END: END}
-        )
-
-        # define the edge from code execution to critic
-        self.graph_builder.add_conditional_edges(
-            'code_execution',
-            lambda x: x["sender"],
-            {'critic': 'critic', 'engineer': 'engineer'}
-        )
-
-        # # add the starting edge to the graph
-        # self.graph_builder.add_edge(START, 'critic')
-        compiled_graph = self.graph_builder.compile()
-        print('the graph is compiled')
-
-        # display the graph if requested
-
-        if True:
-          from IPython.display import Image, display
-          from langchain_core.runnables.graph import CurveStyle, MermaidDrawMethod, NodeStyles
-
-          display(
-              Image(
-                  compiled_graph.get_graph().draw_mermaid_png(
-                      draw_method=MermaidDrawMethod.API,
-                  )
-              )
-          )
-
-          # self.display_graph(compiled_graph)
-
-        return compiled_graph
 
 
 class AgentConfig(ConstructAgentGraph):
@@ -2365,25 +1879,8 @@ class AgentConfig(ConstructAgentGraph):
         # save the df info and relevant columns info
         self.dataframes_info: str = ''
 
-        # define the streamed output for the agent 
+        # define the streamed output for the agent
         self.streamed_output: str = ''
-
-    def _generate_starter_code_aide(self, prompt: str, steps: int = 3):
-        """get the code from the aide library"""
-        exp = aide.Experiment(
-            data_dir="coding",  # replace this with your own directory
-            goal=prompt,  # replace with your own goal description
-            eval="RMSLE"  # replace with your own evaluation metric
-        )
-
-        # run the experiment
-        best_solution = exp.run(steps=steps)
-
-        # correct file paths in the code
-        best_solution.code = self._modify_file_paths_aide_code(best_solution.code)
-
-        # output the code from the aide experiment
-        return best_solution.code
 
     def get_query_auth(self, **kwargs) -> list:
         """get the user id, model id, and chat id"""
@@ -2401,29 +1898,6 @@ class AgentConfig(ConstructAgentGraph):
         return [user_id, chat_id]
 
     # Main execution function
-    def invoke_aide(self, query: str):
-        # Ensure the coding directory exists
-        os.makedirs("coding", exist_ok=True)
-
-        # create the experiment
-        exp = aide.Experiment(
-            data_dir="coding",  # replace this with your own directory
-            goal=query,  # replace with your own goal description
-            eval="RMSLE"  # replace with your own evaluation metric
-        )
-
-        best_solution = exp.run(steps=10)
-
-        print(f"Best solution has validation metric: {best_solution.valid_metric}")
-        print(f"Best solution code: {best_solution.code}")
-
-        return {
-            'best_solution': best_solution.code,
-            'best_solution_metric_results': best_solution.valid_metric
-        }
-
-    # Main execution function
-    # TODO: make the whole workflow agentic even the task decomposition and starter code generation
     def invoke(self, query: str):
         # Ensure the coding directory exists
         os.makedirs("coding", exist_ok=True)
@@ -2457,25 +1931,7 @@ class AgentConfig(ConstructAgentGraph):
         #    'explanation': explanation
         #}
 
-    def html_to_byte_strings_in_directory(self, directory_path: str) -> list:
-        """
-        Convert all HTML files in a directory into a list of byte strings.
-
-        Args:
-            directory_path (str): The path to the directory containing HTML files.
-
-        Returns:
-            list: A list of byte string representations of the HTML files.
-        """
-        byte_strings = []
-        for file_name in os.listdir(directory_path):
-            if file_name.endswith('.html'):
-                file_path = os.path.join(directory_path, file_name)
-                with open(file_path, 'rb') as file:
-                    byte_strings.append(file.read())
-        return byte_strings
-
-    def conditional_invoke(self, question: str, **kwargs) -> list: 
+    def conditional_invoke(self, question: str, **kwargs) -> list:
         """conditionally call the agent without using LangGraph in case of errors with package"""
 
         # make sure the streamed output is empty
@@ -2493,15 +1949,15 @@ class AgentConfig(ConstructAgentGraph):
         self.streamed_output += 'Verifying user credentials...'
         self.streamed_output += '---------------------------\n'
 
-        # define the memory of the thought process 
+        # define the memory of the thought process
         internal_memory: list = []
 
-        # get the last item in the chat history 
+        # get the last item in the chat history
         previous_question, previous_code = self.get_chat_history_from_management(user_id=user_id, model_id=self.model_id, chat_id=chat_id)
         self.streamed_output += f'Retrieved previous question and code from chat history...'
         self.streamed_output += '---------------------------\n'
 
-        # call the follow up question router function 
+        # call the follow up question router function
         follow_decision_response = self.create_follow_up_task_decision_node(question, previous_question, previous_code, manual_mode=True)
         internal_memory.append((question, follow_decision_response))
         self.streamed_output += f'Follow up decision response: {follow_decision_response}'
@@ -2512,83 +1968,86 @@ class AgentConfig(ConstructAgentGraph):
         self.streamed_output += f'Follow up task router decision: {router_decision_tool}'
         self.streamed_output += '---------------------------\n'
 
-        # do the follow up question routing 
-        if router_decision_tool == 'call_draft_code': 
+        # call the question enhancer
+        question = self.create_enhanced_question_node(question)
+        self.streamed_output += f'Enhanced question: {question}'
+        self.streamed_output += '---------------------------\n'
+
+        # do the follow up question routing
+        router_decision_tool = 'call_draft_code' # hard coded for now
+        if router_decision_tool == 'call_draft_code':
             # call the code draft
-            code_response, self.dataframes_info = self.create_first_draft_code_node_modified(question, image_input=image_input)
-            self.streamed_output += f'Code response: \n {code_response}'
-            self.streamed_output += '---------------------------\n'
+            code_generated, self.dataframes_info, file_paths = self.create_first_draft_code_node_modified(question, image_input=image_input)
         elif router_decision_tool == 'call_edit' or not len(self.dataframes_info):
-            code_response = self.create_followup_code_node(question, previous_code, self.dataframes_info, image_input=image_input)
-            self.streamed_output += f'Code response: \n {code_response}'
-            self.streamed_output += '---------------------------\n'
+            code_generated = self.create_followup_code_node(question, previous_code, self.dataframes_info, image_input=image_input)
         else:
             raise Exception("404: router error")
 
-        # save the code response in short term memory 
-        internal_memory.append((question, code_response))
-        # call the code executor 
-        code_output = self.execute_code(code_response)
+        # save the code response in short term memory
+        internal_memory.append((question, code_generated))
+        # call the code executor
+        code_output = self.execute_code(code_generated)
+        print(code_output)
         self.streamed_output += f'Code output: \n {code_output}'
         self.streamed_output += '---------------------------\n'
-        # save in short term memory the code and its response 
-        internal_memory.append((code_response, code_output))
+        # save in short term memory the code and its response
+        internal_memory.append((code_generated, code_output))
 
-        # call the critic node 
-        critic_response = self.create_critic_node(question, code_output, code_response, self.dataframes_info)
-        # save the critic response in the short-term memory 
-        internal_memory.append((code_response, code_output, critic_response))
+        # call the critic node
+        critic_response = self.create_critic_node(question, code_output, code_generated, self.dataframes_info)
+        # save the critic response in the short-term memory
+        internal_memory.append((code_generated, code_output, critic_response))
         self.streamed_output += f'Critic response: \n {critic_response}'
         self.streamed_output += '---------------------------\n'
 
-        # call the critic router 
+        # call the critic router
         critic_router_response = self.critic_router({'messages': internal_memory})
         self.streamed_output += f'Critic router response: \n {critic_router_response}'
         self.streamed_output += '---------------------------\n'
 
         if critic_router_response == 'continue':
-            # define the maximum number of iterations 
+            # define the maximum number of iterations
             n_iter: int = 3
             current_counter: int = 0
 
-            # run the while loop to improve the code generation 
+            # run the while loop to improve the code generation
             while current_counter < n_iter and critic_router_response == 'continue':
-                # get the engineer response 
-                engineer_code_response = self.create_code_engineer_node(question, critic_response, code_output, code_response, self.dataframes_info)
-                self.streamed_output += f'Engineer response: \n {engineer_code_response}'
+                # get the engineer response
+                engineer_code_generated = self.create_code_engineer_node(question, critic_response, code_output, code_generated, self.dataframes_info)
+                self.streamed_output += f'Engineer response: \n {engineer_code_generated}'
                 self.streamed_output += '---------------------------\n'
-                # save the engineer response in the short-term memory 
-                internal_memory.append((critic_response, engineer_code_response))
+                # save the engineer response in the short-term memory
+                internal_memory.append((critic_response, engineer_code_generated))
 
-                # call the code executor 
-                code_output = self.execute_code(engineer_code_response)
-                # save in short term memory the code and its response 
-                internal_memory.append((code_response, code_output))
+                # call the code executor
+                code_output = self.execute_code(engineer_code_generated)
+                # save in short term memory the code and its response
+                internal_memory.append((code_generated, code_output))
 
-                # call the critic again 
-                critic_response = self.create_critic_node(question, code_output, engineer_code_response, self.dataframes_info)
+                # call the critic again
+                critic_response = self.create_critic_node(question, code_output, engineer_code_generated, self.dataframes_info)
                 self.streamed_output += f'Critic response: \n {critic_response}'
                 self.streamed_output += '---------------------------\n'
-                # save the critic response in the short-term memory 
-                internal_memory.append((code_response, code_output, critic_response))
+                # save the critic response in the short-term memory
+                internal_memory.append((code_generated, code_output, critic_response))
 
-                # overwrite the code_response with the engineer_code_response 
-                code_response = engineer_code_response
+                # overwrite the code_response with the engineer_code_response
+                code_generated = engineer_code_generated
 
-                # get the critic router response 
+                # get the critic router response
                 critic_router_response = self.critic_router({'messages': internal_memory})
                 self.streamed_output += f'Critic router response: \n {critic_router_response}'
                 self.streamed_output += '---------------------------\n'
 
-                # update the counter 
+                # update the counter
                 current_counter += 1
 
-            # define the summary node 
-            summary = self.create_summary_node_modified(question, {'code_output': code_output, 'code': code_response})
+            # define the summary node
+            summary = self.create_summary_node_modified(question, {'code_output': code_output, 'code': code_generated})
             self.streamed_output += f'Summary: \n {summary}'
             self.streamed_output += '---------------------------\n'
         elif critic_router_response == 'summary_exit':
-            summary = self.create_summary_node_modified(question, {'code_output': code_output, 'code': code_response})
+            summary = self.create_summary_node_modified(question, {'code_output': code_output, 'code': code_generated})
             self.streamed_output += f'Summary: \n {summary}'
             self.streamed_output += '---------------------------\n'
         else:
@@ -2598,40 +2057,27 @@ class AgentConfig(ConstructAgentGraph):
         print(code_output)
         print('\n')
 
-        # save the chat history 
-        self.add_chat_history_to_management(user_id=user_id, model_id=self.model_id, chat_id=chat_id, question_answer_pair=(question, code_response))
+        # remove duplicates from the csv files
+        self.remove_duplicates_from_csvs(self.data_loader.download_path_model.charts_path)
+
+        # clean the coding directory
+        self.clean_coding_directory(file_paths)
+
+        # save the chat history
+        self.add_chat_history_to_management(user_id=user_id, model_id=self.model_id, chat_id=chat_id, question_answer_pair=(question, code_generated))
 
         # get the byte strings of the html files in the coding directory
         html_byte_strings = self.html_to_byte_strings_in_directory(self.data_loader.download_path_model.coding_path)
 
         # move the html files from the coding directory to the charts directory
-        self.move_html_files_from_coding_to_plots() 
+        self.move_html_files_from_charts_to_reserves()
 
         return summary, html_byte_strings
-        
-
-def old_prompts():
-    """old prompts for the agents"""
-
-    # System messages
-    system_msg_engineer = """
-    Engineer. You write python/bash to retrieve relevant information. Wrap the code in a code block that specifies the script type. The user can't modify your code. So do not suggest incomplete code which requires others to modify. Don't use a code block if it's not intended to be executed by the executor.
-    Don't include multiple code blocks in one response. Do not ask others to copy and paste the result. Check the execution result returned by the executor.
-    If the result indicates there is an error, fix the error and output the code again. Suggest the full code instead of partial code or code changes. If the error can't be fixed or if the task is not solved even after the code is executed successfully, analyze the problem, revisit your assumption, collect additional info you need, and think of a different approach to try.
-    Make sure to use plotly with nice graphics. Make sure to download the file after you are done.
-    """
-    system_msg_planner = """
-    Planner. Given a task, please determine what information is needed to complete the task.
-    Please note that the information will all be retrieved using Python code. Please only suggest information that can be retrieved using Python code.
-    If required, make the graph visually appealing by incorporating the themes and styles from plotly with a modern template. Make sure to pick the write type of chart and stick to it.
-    Include labels, titles, and a legend (if applicable).
-    Ensure the graph is saved as a .png file (if applicable).
-    """
 
 
-#agent_obj = AgentConfig(specific_file_name='/mvp_vertafore_data_production.csv')
-#user_id = 1
-#chat_id = 1
+agent_obj = AgentConfig()
+user_id = 1
+chat_id = 1
 
 # Create an instance of MyStreamHandler
 #stream_handler = MyStreamHandler()
@@ -2639,10 +2085,11 @@ def old_prompts():
 # Set user_id and chat_id before starting
 #stream_handler.set_user_and_chat(user_id=user_id, chat_id=chat_id)
 
-#agent_obj._create_prompt('find me the average age of the respondents. Make sure to clean the age column first')
+#agent_obj.specialized_file_management('Please pull up the building information for a specific address?')
+#agent_obj._create_prompt('Find out which agent had the most business in the last year?')
 #agent_obj._create_prompt('find me the average minutes that were spent during a session? use /content/coding/kinkinterestpublic.csv')
-#agent_obj._generate_starter_code_llm('get me the average of the this coding file')
+#agent_obj.create_first_draft_code_node_modified('find out which agent had the most business in the last year?')
 #starter_code, file_paths, agent_prompt = agent_obj._create_prompt('get me the average of the age column')
 #task, file_names, agent_prompt, task_breakdown = agent_obj._create_prompt('get me the average of the age column')
-#agent_obj.conditional_invoke('what is the most common type of transaction descrption', user_id=user_id, chat_id=chat_id)
+summary, chart = agent_obj.conditional_invoke('find out which agent had the most business in the last year?', user_id=user_id, chat_id=chat_id)
 

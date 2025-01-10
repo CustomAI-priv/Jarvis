@@ -895,6 +895,10 @@ class SummarizeResearchPapers(ResearchPaperDownloader):
 
         return summaries, '\n'.join(summaries)
 
+    def updated_summarize_research_paper(self, research_paper_path: str) -> list[dict]:
+        """Define the markdown template and use structured output..."""
+        pass
+
     def summarize_research_paper_notebooklm(self, research_paper_path: str) -> list[dict]:
         """Summarize the research papers using the NotebookLM model"""
         pass

@@ -1,8 +1,14 @@
+import os
 import sqlite3
 from datetime import datetime
 import hashlib
 import logging
 from uuid import uuid4
+from pathlib import Path
+from application_state import ApplicationStateManager
+
+# define the global state manager
+state_manager = ApplicationStateManager()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -15,12 +21,25 @@ class DBUtilities:
             raise ValueError("max_items_per_chat must be a positive integer.")
         if not isinstance(max_chats_per_model, int) or max_chats_per_model <= 0:
             raise ValueError("max_chats_per_model must be a positive integer.")
-
-        self.connection = sqlite3.connect(db_name, check_same_thread=False)
+        
+        # Get the absolute path of the current file (chat_history_management.py)
+        current_file = Path(__file__).resolve()
+        
+        # Get the backend directory (parent directory of current file)
+        backend_dir = current_file.parent
+        
+        # Create backend directory if it doesn't exist
+        os.makedirs(backend_dir, exist_ok=True)
+        
+        # Construct the full database path
+        db_path = backend_dir / db_name
+        logging.info(f"Using database path: {db_path}")
+        
+        self.connection = sqlite3.connect(str(db_path), check_same_thread=False)
         self.connection.execute("PRAGMA foreign_keys = ON;")  # Enable foreign key support
 
-        self.max_items_per_chat = max_items_per_chat  # Define the maximum items per chat
-        self.max_chats_per_model = max_chats_per_model  # Define the max chats per model
+        self.max_items_per_chat = max_items_per_chat
+        self.max_chats_per_model = max_chats_per_model
 
     def close(self):
         """Close the database connection."""
@@ -30,15 +49,27 @@ class DBUtilities:
 
 
 class ChatHistoryManagement(DBUtilities):
+
+    """
+    This class is used to manage the chat history database.
+    """
+
     def __init__(self, db_name='chat_history.db', max_items_per_chat=100, max_chats_per_model=10):
         super().__init__(db_name, max_items_per_chat, max_chats_per_model)
-        self.create_tables()
-        self.create_indexes()
-        #self.add_verification_code_column()
+
+        # get the database creation flag
+        self.db_created_flag = state_manager.get_state('chat_history_db_created_flag')
+
+        # if the database has not been created, create the tables
+        if not self.db_created_flag:
+            self.create_tables()
+            self.create_indexes()
+            self.ensure_user_id_column()
+            state_manager.set_state('chat_history_db_created_flag', 1)
 
     def create_tables(self):
         with self.connection:
-            # Create the Users table with verification_code column
+            # Create the Users table first
             self.connection.execute('''
                 CREATE TABLE IF NOT EXISTS users (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -50,7 +81,7 @@ class ChatHistoryManagement(DBUtilities):
                 )
             ''')
 
-            # Create the Chat History table
+            # Create the Chat History table with user_id column
             self.connection.execute('''
                 CREATE TABLE IF NOT EXISTS chat_history (
                     message_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,6 +94,19 @@ class ChatHistoryManagement(DBUtilities):
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                 )
             ''')
+
+    def ensure_user_id_column(self):
+        """Ensure that the user_id column exists in the chat_history table."""
+        with self.connection:
+            cursor = self.connection.execute("PRAGMA table_info(chat_history)")
+            columns = [col[1] for col in cursor.fetchall()]
+            if 'user_id' not in columns:
+                # Add the user_id column if it's missing
+                self.connection.execute('''
+                    ALTER TABLE chat_history
+                    ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0
+                ''')
+                # Optionally, you may need to backfill user_id if your application logic requires it.
 
     # Add this method to the UserManagement class
     def add_verification_code_column(self):
@@ -87,21 +131,30 @@ class ChatHistoryManagement(DBUtilities):
             return cursor.fetchone()[0]
 
     def create_indexes(self):
+        """Create indexes after ensuring tables and columns exist"""
         with self.connection:
-            # Create an index on the user_id column in the chat_history table
-            self.connection.execute('''
-                CREATE INDEX IF NOT EXISTS idx_chat_history_user_id ON chat_history(user_id)
-            ''')
+            # Check if the chat_history table exists
+            cursor = self.connection.execute("""
+                SELECT name FROM sqlite_master 
+                WHERE type='table' AND name='chat_history'
+            """)
+            
+            if cursor.fetchone():
+                # Create indexes only if the table exists
+                self.connection.execute('''
+                    CREATE INDEX IF NOT EXISTS idx_chat_history_user_id 
+                    ON chat_history(user_id)
+                ''')
 
-            # Create an index on the model_id column in the chat_history table
-            self.connection.execute('''
-                CREATE INDEX IF NOT EXISTS idx_chat_history_model_id ON chat_history(model_id)
-            ''')
+                self.connection.execute('''
+                    CREATE INDEX IF NOT EXISTS idx_chat_history_model_id 
+                    ON chat_history(model_id)
+                ''')
 
     def save_message(self, user_id: int, model_id: int, chat_id: int, question: str, answer: str):
         """Saves a question and answer pair to the chat history for a specific user, model, and chat."""
         current_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        
+
         with self.connection:
             # Check if the question and answer pair already exists
             cursor = self.connection.execute('''
@@ -119,7 +172,7 @@ class ChatHistoryManagement(DBUtilities):
             else:
                 # Update the timestamp for existing entry
                 self.connection.execute('''
-                    UPDATE chat_history 
+                    UPDATE chat_history
                     SET timestamp = ?
                     WHERE user_id = ? AND model_id = ? AND chat_id = ? AND question = ? AND answer = ?
                 ''', (current_timestamp, user_id, model_id, chat_id, question, answer))
@@ -146,21 +199,52 @@ class ChatHistoryManagement(DBUtilities):
             ''', (user_id, model_id, chat_id))
             return cursor.fetchone()[0]
 
-    def get_chat_ids_sorted_by_timestamp(self, user_id: int):
-        """Retrieves all chat IDs and their model IDs for a specific user and sorts them by timestamp."""
+    def get_chat_ids_sorted_by_timestamp(self, user_id: int, model_id: int = None, chat_id: int = None):
+        """
+        Retrieves all chat messages for a specific user and optionally filters by model_id and chat_id.
+        
+        Args:
+            user_id (int): The user ID to fetch messages for
+            model_id (int, optional): Filter messages by model ID
+            chat_id (int, optional): Filter messages by chat ID
+        """
         with self.connection:
-            cursor = self.connection.execute('''
-                SELECT DISTINCT chat_id, model_id, timestamp
+            # Build the query dynamically based on provided parameters
+            query = '''
+                SELECT DISTINCT message_id, chat_id, model_id, question, answer, timestamp
                 FROM chat_history
                 WHERE user_id = ?
-                ORDER BY timestamp DESC
-            ''', (user_id,))
-            chat_ids = cursor.fetchall()
+            '''
+            params = [user_id]
+
+            if model_id is not None:
+                query += ' AND model_id = ?'
+                params.append(model_id)
             
-            # Create a list of dictionaries containing chat_id and model_id
-            sorted_chat_ids = [{"chat_id": chat_id, "model_id": model_id, "user_id": user_id} for chat_id, model_id, _ in chat_ids]
-            logging.info(f"Retrieved and sorted chat IDs for user '{user_id}': {sorted_chat_ids}")
-            return sorted_chat_ids
+            if chat_id is not None:
+                query += ' AND chat_id = ?'
+                params.append(chat_id)
+
+            query += ' ORDER BY timestamp DESC'
+            
+            cursor = self.connection.execute(query, params)
+            messages = cursor.fetchall()
+
+            # Create a list of dictionaries containing message details
+            sorted_messages = [{
+                "message_id": msg[0],
+                "chat_id": msg[1],
+                "model_id": msg[2],
+                "question": msg[3],
+                "answer": msg[4],
+                "timestamp": msg[5],
+                "user_id": user_id
+            } for msg in messages]
+            
+            logging.info(f"Retrieved {len(sorted_messages)} messages for user '{user_id}'" + 
+                        (f", model '{model_id}'" if model_id else "") + 
+                        (f", chat '{chat_id}'" if chat_id else ""))
+            return sorted_messages
 
 
 class UserManagement(DBUtilities):
@@ -181,7 +265,7 @@ class UserManagement(DBUtilities):
             # Fetch and print all users in the database for debugging
             cursor = self.connection.execute('SELECT id, username, email, password_hash FROM users')
             all_users = cursor.fetchall()
-            
+
             print("\nAll users in the database:")
             for user in all_users:
                 print(user)
@@ -192,24 +276,24 @@ class UserManagement(DBUtilities):
                 SELECT id, password_hash FROM users WHERE email = ?
             ''', (email,))
             user = cursor.fetchone()
-            
+
             if not user:
                 logging.warning(f"No user found with email '{email}'")
                 return False
-                
+
             if not self.check_password_hash(user[1], password):
                 print('password hash issue')
                 logging.warning(f"Invalid password for email '{email}'")
                 return False
-            
+
             # Update the verification code using the found user ID
             print('this is the user id:', user[0])
             self.connection.execute('''
-                UPDATE users 
+                UPDATE users
                 SET verification_code = ?
                 WHERE id = ?
             ''', (verification_code, user[0]))
-            
+
             logging.info(f"Verification code updated for user ID '{user[0]}' with email '{email}'")
             return True
 
@@ -236,20 +320,20 @@ class UserManagement(DBUtilities):
             logging.error(f"Failed to register user '{username}': {e}")
             return False  # Username or email already exists
 
-    def login_user(self, email, password):
+    def login_user(self, username, password):
         """Logs in a user by verifying their username and password."""
         with self.connection:
             cursor = self.connection.execute('''
-                SELECT id, password_hash FROM users WHERE email = ?
-            ''', (email,))
+                SELECT id, password_hash FROM users WHERE username = ?
+            ''', (username,))
             user = cursor.fetchone()
             print(user)
             if user and self.check_password_hash(user[1], password):
                 print('this is the user id:', user[0])
                 print('the login worked!')
-                logging.info(f"User '{email}' logged in successfully.")
+                logging.info(f"User '{username}' logged in successfully.")
                 return user[0]  # Return user ID
-            logging.warning(f"Login failed for user '{email}'.")
+            logging.warning(f"Login failed for user '{username}'.")
             return None
 
     def get_user(self, user_id):
@@ -337,8 +421,8 @@ class CleanupOperations(DBUtilities):
             logging.error(f"An error occurred during chat cleanup: {e}")
 
 
-username = 'testuser'
-email = 'martin.mashalov@gmail.com'
+username = 'testuser2'
+email = 'bigbrideai@gmail.com'
 password = 'securepassword'
 model_type = 1 # text model
 chat_id = 4
@@ -347,28 +431,30 @@ chat_id = 4
 chat_history_management = ChatHistoryManagement()
 user_manager = UserManagement()
 
-"""# register a user
-print('register user:', user_manager.register_user(username, email, password))
+def test(): 
+    # register a user
+    print('register user:', user_manager.register_user(username, email, password))
 
-# send the verification code
-print('enter verification code:', user_manager.enter_verification_code(email, password, '123456'))
+    # send the verification code
+    print('enter verification code:', user_manager.enter_verification_code(email, password, '123456'))
 
-# verify the verification code
-print('verify verification code:', user_manager.verify_verification_code(email, '123456'))
+    # verify the verification code
+    print('verify verification code:', user_manager.verify_verification_code(email, '123456'))
 
-# get the user id
-user_id = user_manager.login_user(username, password)
-print('login user:', user_id)
+    # get the user id
+    user_id = user_manager.login_user(username, password)
+    print('login user:', user_id)
 
-# Insert two messages into the chat history
-chat_history_management.save_message(user_id, model_type, chat_id, "Hello, how are you?", "I'm good, thank you!")
-chat_history_management.save_message(user_id, model_type, chat_id, "What can you do?", "I can assist you with various tasks!")
+    # Insert two messages into the chat history
+    chat_history_management.save_message(user_id, model_type, chat_id, "Hello, how are you?", "I'm good, thank you!")
+    chat_history_management.save_message(user_id, model_type, chat_id, "What can you do?", "I can assist you with various tasks!")
 
-# Retrieve the chat history for the user
-chat_history = chat_history_management.get_chat_ids_sorted_by_timestamp(user_id)
-print("Chat History:")
-for message in chat_history:
-    print(message)
-    #print(f"Question: {message[0]}, Answer: {message[1]}, Timestamp: {message[2]}")"""
-
+    # Retrieve the chat history for the user
+    chat_history = chat_history_management.get_chat_ids_sorted_by_timestamp(user_id, model_type, chat_id)
+    print("Chat History:")
+    for message in chat_history:
+        print(f"Chat ID: {message['chat_id']}")
+        print(f"Question: {message['question']}")
+        print(f"Answer: {message['answer']}")
+        print(f"Timestamp: {message['timestamp']}\n")
 

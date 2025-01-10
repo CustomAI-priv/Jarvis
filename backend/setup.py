@@ -34,7 +34,7 @@ import Stemmer
 
 from PIL import Image
 import voyageai
-import PIL 
+import PIL
 from pdf2image import convert_from_path
 from PyPDF2 import PdfReader
 from pypdf import PdfReader as PdfReader2  # Renamed to avoid conflict
@@ -92,14 +92,14 @@ from transformers import AutoProcessor
 
 from colpali_engine.models.paligemma import ColPali, ColPaliProcessor
 from vespa.package import (
-    Schema, 
-    Field, 
-    FieldSet, 
-    HNSW, 
-    ApplicationPackage, 
-    RankProfile, 
-    Function, 
-    FirstPhaseRanking, 
+    Schema,
+    Field,
+    FieldSet,
+    HNSW,
+    ApplicationPackage,
+    RankProfile,
+    Function,
+    FirstPhaseRanking,
     SecondPhaseRanking,
     Document as VespaDocument  # Rename import to avoid conflicts
 )
@@ -111,16 +111,18 @@ from vespa.deployment import VespaDocker, VespaCloud
 
 # import company and sector definitions
 try:
-    from sector_settings import SectorSettings
+    from backend.sector_settings import SectorSettings
 except ImportError:
+    from sector_settings import SectorSettings
     print('sector_settings.py not found')
     pass
 try:
-    from backend.sector_settings import SectorSettings
+    from dataset_storage_management import CSVDatabaseHandler
 except ImportError:
-    print('sector_settings.py not found')
+    from backend.dataset_storage_management import CSVDatabaseHandler
+    print('dataset_storage_management.py not found')
     pass
-print(SectorSettings)
+
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -133,14 +135,19 @@ getpreferredencoding = lambda: "UTF-8"
 warnings.filterwarnings('ignore')
 
 # import the api keys
-from api_keys import api_key, claude_api_key, voyage_api_key, cohere_api_key, azure_api_key, azure_endpoint
+try:
+    from api_keys import api_key, claude_api_key, voyage_api_key, cohere_api_key, azure_api_key, azure_endpoint
+except ImportError:
+    from backend.api_keys import api_key, claude_api_key, voyage_api_key, cohere_api_key, azure_api_key, azure_endpoint
+    print('api_keys.py not found')
+    pass
 
 # set the environment variables
 os.environ['ANTHROPIC_API_KEY'] = claude_api_key
 os.environ["OPENAI_API_KEY"] = api_key
 os.environ["VOYAGE_API_KEY"] = voyage_api_key
 
-# set vespa settings 
+# set vespa settings
 os.environ['TOKENIZERS_PARALLELISM'] = "false"
 
 RAG_colbert_downloaded = RAGPretrainedModel.from_pretrained("colbert-ir/colbertv2.0")
@@ -176,7 +183,7 @@ class GeneralSettings(BaseModel):
     vectordb_idx: dict = {
         1: 'db_text',
         2: 'db_tables',
-        3: 'db_table_descriptions', 
+        3: 'db_table_descriptions',
         4: 'db_text_image_embeddings' # multimodal mode
     }
     text_databases: list = [1]
@@ -208,34 +215,46 @@ class GeneralSettings(BaseModel):
     summary_temp: float = 0.0  # Temperature for CSV summary generation
     top_k_csv_files: int = 2
     csv_chunk_size: int = 6000
+    postgres_mode: bool = True
 
-    # define the uploading method for files  
-    upload_method: str = 'auto' # or 'manual'
+    # define the uploading method for files
+    upload_method: str = 'manual' # or 'auto'
     retain_files_condition: bool = True
     disable_external_upload: bool = True
+    multimodal_images_download: bool = True
+    multimodal_concurrent_workers: int = 8
 
 
 class DownloadPaths(BaseModel):
     """define the download paths for the files to sort them into their respective directories"""
-    base_path: str = os.getcwd()  # Get the current working directory
-    markdown_path: str = os.path.join(base_path, 'markdown')
-    pdf_path: str = os.path.join(base_path, 'pdf')
-    table_path: str = os.path.join(base_path, 'table')
-    json_path: str = os.path.join(base_path, 'json')
-    image_path: str = os.path.join(base_path, 'images')
-    coding_path: str = os.path.join(base_path, 'coding')
-    charts_path: str = os.path.join(base_path, 'charts')
+    base_path: str = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # Get the project root directory
+    backend_path: str = os.path.join(base_path, 'backend')
+    markdown_path: str = os.path.join(backend_path, 'markdown')
+    pdf_path: str = os.path.join(backend_path, 'pdf')
+    table_path: str = os.path.join(backend_path, 'table')
+    json_path: str = os.path.join(backend_path, 'json')
+    image_path: str = os.path.join(backend_path, 'images')
+    coding_path: str = os.path.join(backend_path, 'coding')
+    charts_path: str = os.path.join(backend_path, 'charts')
+    reserves_path: str = os.path.join(backend_path, 'reserves')
 
 
 class StorageSettings(BaseModel):
-  """settings for where to store data from vector databases"""
+    """settings for where to store data from vector databases"""
+    base_path: str = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    backend_path: str = os.path.join(base_path, 'backend')
+    
+    # define the paths (subject to change)
+    chromadb_path: str = os.path.join(backend_path, 'chroma_data')
+    colbert_path: str = os.path.join(backend_path, '.ragatouille/colbert/indexes')
+    initial_data_path: str = os.path.join(backend_path, 'initial_data.txt')
 
-  # define the paths (subject to change)
-  chromadb_path: str = '/content/chroma_data/'
-  colbert_path: str = '/content/.ragatouille/colbert/indexes/'
-
-  # starting information for colbert system
-  initial_data_path: str = '/content/initial_data.txt'
+    # define the csv database handler
+    csv_db_handler_database: str = "analytical_agent_db"
+    csv_db_handler_password: str = "CustomAI1234"
+    csv_db_handler_host: str = "localhost"
+    csv_db_handler_port: int = 5432
+    csv_db_table_name: str = "stone_insurance"
 
 
 # define a text embedding for LanceDB custom made integrating Azure
@@ -254,8 +273,8 @@ class SentenceTransformerEmbeddings(TextEmbeddingFunction):
         """generate the embeddings for the texts"""
         # generate the embeddings
         results = self._embedding_model().embeddings.create(input = texts, model=self.deployment_name).data #[0].embedding
-        
-        # return the embeddings as a list structure 
+
+        # return the embeddings as a list structure
         return [i.embedding for i in results]
 
     def ndims(self):
@@ -303,7 +322,7 @@ multi_modal_schema = pa.schema([
 
 
 class ResearchPapersSchema(LanceModel):
-    vector: Vector(lancedb_embeddings.ndims()) = lancedb_embeddings.VectorField()  
+    vector: Vector(lancedb_embeddings.ndims()) = lancedb_embeddings.VectorField()
     summary: str = lancedb_embeddings.SourceField()
     title: str
     authors: str
@@ -311,6 +330,14 @@ class ResearchPapersSchema(LanceModel):
     published: str
     pdf_link: str
     affiliations: str
+
+
+class LLMModelSpecs(BaseModel):
+    temperature: float = 0.0
+    model_id: str = "gpt-4o"
+    model_deployment_name: str = "jarvis_llm"
+    max_tokens: int = 100
+    private_llm_mode: bool = True
 
 
 class Utilities:
@@ -321,7 +348,7 @@ class Utilities:
         self.embedding_idx: Dict[int, Any] = {
             1: GPT4AllEmbeddings(),
             2: openai_embeddings,
-            3: lancedb_embeddings, 
+            3: lancedb_embeddings,
             4: voyageai.Client() #VoyageAIEmbeddings(voyage_api_key=voyage_api_key, model="voyage-3")
         }
         # define the settings model to be used globally
@@ -341,11 +368,47 @@ class Utilities:
                     app_secret = self.app_secret,
                     oauth2_refresh_token = self.dbx_refresh_token
                 )
-        
+
         self._initialized = True
 
+        # define the csv database handler
+        self.csv_db_handler = CSVDatabaseHandler(
+            database=self.storage_settings.csv_db_handler_database,
+            password=self.storage_settings.csv_db_handler_password,
+        )
+
+        # define baseline model
+        self.baseline_setup_model = self.initialize_llm()
+
+    def initialize_llm(self, stream_handler: Any = None, model_specs: BaseModel = LLMModelSpecs()):
+        """Initialize the LLM with current stream_url"""
+        try:
+            if model_specs.private_llm_mode:
+                os.environ["OPENAI_API_VERSION"] = "2024-02-01"
+                os.environ["AZURE_OPENAI_ENDPOINT"] = azure_endpoint
+                os.environ["AZURE_OPENAI_API_KEY"] = azure_api_key
+
+                llm_baseline = AzureChatOpenAI(
+                    temperature=model_specs.temperature,
+                    azure_deployment=model_specs.model_deployment_name,
+                    max_retries=2,
+                    max_tokens=model_specs.max_tokens,
+                    callbacks=[stream_handler] if stream_handler is not None else None
+                )
+            else:
+                llm_baseline = ChatOpenAI(
+                    temperature=model_specs.temperature,
+                    openai_api_key=api_key,
+                    model=model_specs.model_id,
+                    #callbacks=[stream_handler] if stream_handler is not None else None
+                )
+        except:
+            raise Exception("Invalid API key provided")
+
+        return llm_baseline
+
     # Function to check if the database is empty
-    @staticmethod 
+    @staticmethod
     def is_database_empty(db):
         table_names = db.table_names()
         if not table_names:
@@ -359,7 +422,7 @@ class Utilities:
             doc_count = len(table.to_pandas())
             total_docs += doc_count
         return total_docs == 0
-    
+
     @staticmethod
     def process_flashrank_responses(results: list) -> list:
         """post process the results from the flashrank reranking algorithm"""
@@ -411,7 +474,7 @@ class Utilities:
     def generate_random_id():
         """generate a random ID for an object in a vector store or other database type"""
         return str(uuid.uuid4())
-
+    
     @staticmethod
     def format_docs(docs):
         return "\n\n".join(doc.page_content for doc in docs)
@@ -553,14 +616,14 @@ class Utilities:
         """
         # Extract the basename (filename with extension)
         base_name = os.path.basename(file_path)
-        
+
         # Replace any remaining slashes with underscores (if any)
         sanitized_path = base_name.replace('/', '_').replace('\\', '_')
 
         return sanitized_path
 
     @staticmethod
-    def get_base64_image(image, add_url_prefix=True):
+    def get_base64_image(image, format: str = 'JPEG', add_url_prefix=True):
         """
         Converts a PIL Image to a base64 encoded string.
 
@@ -573,16 +636,16 @@ class Utilities:
         """
         # Create a byte buffer to store the image data
         buffered = BytesIO()
-        
+
         # Save the image to the buffer in PNG format
-        image.save(buffered, format="PNG")
-        
+        image.save(buffered, format=format)
+
         # Encode the image data to base64 and convert to a UTF-8 string
         img_str = base64.b64encode(buffered.getvalue()).decode('utf-8')
-        
+
         # Optionally add the data URL prefix
         if add_url_prefix:
-            return f'data:image/png;base64,{img_str}'
+            return f'data:image/{format.lower()};base64,{img_str}'
         else:
             return img_str
 
@@ -620,13 +683,13 @@ class FileManagement(Utilities):
     def manual_file_download(self, file_path: str, **kwargs) -> None:
         """
         Manually download a file from manual_upload directory and organize it into appropriate folders.
-        
+
         Args:
             file_path (str): Name of the file to be moved from manual_upload directory
         """
         # Get the file name from the path
         file_name = os.path.basename(file_path)
-        
+
         # Define source path (manual upload directory)
         manual_upload_path = os.path.join(self.download_path_model.base_path, 'manual_upload')
         source_path = os.path.join(manual_upload_path, file_name)
@@ -664,7 +727,7 @@ class FileManagement(Utilities):
 
         # Get the source directory from the kwargs
         source_dir: str = kwargs.get('source_dir', None)
-        
+
         # Define the source path from the manual_upload directory
         source_path = source_dir + file_name
 
@@ -672,16 +735,16 @@ class FileManagement(Utilities):
         destination_path = local_dir + file_name
 
         # Move the file from the manual_upload directory to the specified local directory
-        try:    
+        try:
             shutil.move(os.path.normpath(source_path), os.path.normpath(destination_path))
             #print(f"Successfully moved {file_name} from {source_path} to {destination_path}.")
         except Exception as e:
-            pass 
-    
+            pass
+
     # This function manages the manual file download and upload from either the manual upload directory or the dropbox.
     def manual_file_manager(self, file_path: str, **kwargs) -> None:
         """manage the manual file download and upload"""
-        
+
         # download the files
         if kwargs.get('download', False):
             self.manual_file_download(file_path, **kwargs)
@@ -689,12 +752,12 @@ class FileManagement(Utilities):
         # move the files
         elif kwargs.get('move', False):
             self.move_file_manually(file_path, **kwargs)
-        
-        return 
+
+        return
 
     def manual_move_file_back(self, file_path: str, **kwargs):
         """move a file back to the manual upload directory"""
-        
+
         # get the local directory from the kwargs
         local_dir: str = kwargs.get('local_dir', '/')
 
@@ -718,10 +781,10 @@ class FileManagement(Utilities):
         """Get all files uploaded in the last 1 day from the manual_upload directory."""
         recent_files = []
         one_day_ago = datetime.now() - timedelta(days=1)
-        
+
         # Define the path to the manual upload directory
         manual_upload_path: str = os.path.join(self.download_path_model.base_path, 'manual_upload/')
-        
+
         # Get a list of all files in the manual_upload directory
         for file_name in os.listdir(manual_upload_path):
 
@@ -730,7 +793,6 @@ class FileManagement(Utilities):
 
             # get the file modification time
             file_mod_time = datetime.fromtimestamp(os.path.getmtime(file_path))
-            print(file_name, file_mod_time)
 
             # Check if the file was modified in the last day
             if os.path.isfile(file_path) and file_mod_time > one_day_ago:
@@ -765,7 +827,7 @@ class FileManagement(Utilities):
     # This function retrieves recent files based on the specified upload method (manual or automatic).
     def get_recent_files(self, **kwargs) -> list:
         """get the recent files from the manual upload and the dropbox"""
-        
+
         # Check if the upload method is set to 'manual'
         if self.settings.upload_method == 'manual':
             # If manual, retrieve recent files from the manual upload directory
@@ -828,7 +890,7 @@ class FileManagement(Utilities):
                 container.append(entry.path_display)
         # Return the list of deleted file paths.
         return container
-    
+
     # This function lists deleted files from Dropbox.
     def list_deleted_dropbox_files(self, dbx, path=""):
         container: list = []
@@ -845,16 +907,16 @@ class FileManagement(Utilities):
             print(f"API error: {err}")
             pass
         return container
-    
+
     # This function lists deleted files in the manual upload directory.
     def list_deleted_manual_upload_files(self) -> list:
         """
-        List all files that have been deleted by comparing current server files 
+        List all files that have been deleted by comparing current server files
         with the previous state stored in current_files.txt
         """
         # define a container to fill with the deleted files
         deleted_files: list = []
-        
+
         # define a container to fill with the current files
         current_server_files: set = set()
 
@@ -867,7 +929,7 @@ class FileManagement(Utilities):
             'markdown': self.download_path_model.markdown_path,
             'manual_upload': os.path.join(self.download_path_model.base_path, 'manual_upload/')
         }
-        
+
         # Get all current files from all directories
         for dir_type, dir_path in directories.items():
             if os.path.exists(dir_path):
@@ -875,24 +937,24 @@ class FileManagement(Utilities):
                     file_path = os.path.join(dir_path, file_name)
                     if os.path.isfile(file_path):  # Make sure it's a file
                         current_server_files.add(os.path.basename(file_name))
-                        print(f"Found file in {dir_type}: {file_name}")  # Debug print
-        
+                        #print(f"Found file in {dir_type}: {file_name}")  # Debug print
+
         # Read the previous state from current_files.txt
         try:
             with open('current_files.txt', 'r') as f:
                 previous_files: set = set(line.strip() for line in f.readlines())
         except FileNotFoundError:
             previous_files: set = set()
-        
+
         # Find files that were in previous_files but are not in current_server_files
         deleted_files = list(previous_files - current_server_files)
-        
+
         return deleted_files
 
     # This function lists deleted files from both the manual upload and the dropbox.
     def list_deleted_files(self, **kwargs):
         """list the deleted files from both the manual upload and the dropbox"""
-        
+
         # Check the upload method to determine how to list deleted files
         if self.settings.upload_method == 'manual':
             print("in manual mode")
@@ -906,7 +968,7 @@ class FileManagement(Utilities):
                 raise ValueError("dbx client is not provided")
             # Call the function to list deleted files from Dropbox
             return self.list_deleted_dropbox_files(dbx=dbx)
-        
+
     # This function uploads a file to Dropbox, replacing the old file if it exists.
     def upload_to_dropbox(self, file_path: str) -> None:
         """
@@ -916,7 +978,7 @@ class FileManagement(Utilities):
             file_path (str): The path to the file to be uploaded.
         """
         dropbox_path = f'/{os.path.basename(file_path)}'
-      
+
         try:
             # Check if file already exists
             try:
@@ -962,6 +1024,9 @@ class FileManagement(Utilities):
             print(f"Error uploading file to Dropbox: {str(e)}")
 
 
+db_initialized_container: dict = {}
+
+
 class VectorDB(FileManagement):
     """
     This class manages the interaction with the vector database, facilitating:
@@ -981,11 +1046,12 @@ class VectorDB(FileManagement):
 
     def __init__(self):
         super().__init__()
+        global db_initialized_container
 
         # define the selected embedding model
         self.embedding = self.embedding_idx[self.settings.embedding_selected]
 
-        # define the mapping of database schemas 
+        # define the mapping of database schemas
         self.vectordb_schemas = {1: ResearchPapersSchema, 2: DocumentsSchema}
 
         # initialize databases if it is the first run of the code
@@ -1030,10 +1096,7 @@ class VectorDB(FileManagement):
 
     def fetch_lancedb_client(self) -> dict:
         """Create or open the LanceDB client and tables, overwriting only if the database is empty."""
-
-        # Output container for the tables
-        container: dict = {}
-
+        print(db_initialized_container)
         # Create the database connection
         db = lancedb.connect(self.settings.database_path)
 
@@ -1045,11 +1108,11 @@ class VectorDB(FileManagement):
 
         # For each table we need, check if it exists
         for key, val in self.settings.vectordb_idx.items():
-            # define the schema 
+            # define the schema
             schema = self.vectordb_schemas[self.settings.documents_schema_index] if key != 4 else multi_modal_schema
             if database_empty:
                 # Database is empty, create tables with overwrite mode
-                container[key] = db.create_table(
+                db_initialized_container[key] = db.create_table(
                     name=val,
                     mode="overwrite",
                     schema=schema
@@ -1058,17 +1121,18 @@ class VectorDB(FileManagement):
             else:
                 if val in existing_tables:
                     # Open existing table
-                    container[key] = db.open_table(name=val)
-                    print(f"Opened existing table: {val}")
+                    if key not in db_initialized_container:
+                        db_initialized_container[key] = db.open_table(name=val)
+                        print(f"Opened existing table: {val}")
                 else:
                     # Table doesn't exist, create it without overwriting existing tables
-                    container[key] = db.create_table(
-                        name=val,
-                        schema=schema
-                    )
-                    print(f"Created new table: {val}")
-
-        return container
+                    if key not in db_initialized_container:
+                        db_initialized_container[key] = db.create_table(
+                            name=val,
+                            schema=schema
+                        )
+                        print(f"Created new table: {val}")
+        return db_initialized_container
 
     def initialize_chromadb(self) -> list:
         """initialize the chromadb collection"""
@@ -1222,7 +1286,7 @@ class VectorDB(FileManagement):
         if document_type in self.settings.text_databases: # text mode
             # add the data to the collection
             for i in tqdm(range(0, len(documents), batch_size)):
-                # define the batch of documents to add 
+                # define the batch of documents to add
                 batch = documents[i:i+batch_size]
 
                 # add the batch to the collection
@@ -1230,12 +1294,12 @@ class VectorDB(FileManagement):
         elif document_type == 4: # multimodal mode
             # add the data to the collection
             for i in tqdm(range(0, len(documents), batch_size)):
-                # define the batch of documents to add 
+                # define the batch of documents to add
                 batch = documents[i:i+batch_size]
 
                 # add the batch to the collection
                 collection.add(batch)
-        else: # all other modes that do not require batching 
+        else: # all other modes that do not require batching
             collection.add(documents)
 
     def create_lancedb_fts_index(self):
@@ -1260,24 +1324,13 @@ class ReturnDataFrameProcessor(DataFrameProcessor):
     def process(self, df: pd.DataFrame, **kwargs) -> pd.DataFrame:
         """Returns the original DataFrame."""
         return df
+    
 
-
-# Class for the second functionality: modifying the DataFrame based on the filename
 class ModifyDataFrameProcessor(DataFrameProcessor):
     def process(self, df: pd.DataFrame, **kwargs) -> pd.DataFrame:
         """
-        Modifies the DataFrame based on the filename:
-        
-        1. If the filename is 'Egodeath public', drops specified columns.
-        2. If the filename is 'ConsentResultsPublic', removes substrings in headers matching 'This is: (...)' or '(...)' along with any trailing spaces.
-        3. If the filename is 'Relationships Raw Data Public', removes all '(...)' substrings from the headers along with any trailing spaces.
-        4. If the filename is 'Chaos Survey Public', removes all columns containing the substring 'Randomize' and then removes all '(...)' substrings from the remaining headers.
-        5. If the filename is 'correlations KINKSURVEYDONE2', removes all headers that have blank entries in all of their columns.
-        6. If the filename is 'How Rationalist Are You raw data public', removes all '(...)' substrings from headers and keeps only specific columns starting from the 15th header.
-        7. If the filename is 'Gender And Valence Avg Ratings', sets the first row as column headers, drops the 'thing?' column, and replaces 'x' with 1 and blanks with 0 in specific columns.
-        8. If the filename is 'taboo-ratings', removes all '(...)' from column headers and keeps only odd-numbered columns starting from the 21st header.
-        9. If the filename is 'Raw Gender And Valence Data', removes all columns containing the substring 'Randomize', removes all '(...)' substrings from headers starting from the 7th header, keeps the first 8 columns, and then keeps only every other column starting from the 9th.
-        10. If the filename is 'Correlation Chart for the Childhood Survey (Public)', removes all '(...)' substrings from headers and sets the first column as the index.
+        Modifies the DataFrame based on the filename. Applies specific transformations for known files
+        and general cleaning for all files.
 
         Args:
             df (pd.DataFrame): The original DataFrame to be processed.
@@ -1286,225 +1339,119 @@ class ModifyDataFrameProcessor(DataFrameProcessor):
         Returns:
             pd.DataFrame: The modified DataFrame with specified changes applied.
         """
-
-        # Extract just the filename from the path and convert to lowercase
         filename = os.path.basename(kwargs.get('filename', '')).lower()
-        #print('this is the filename: ', filename)
 
-        # Check if the filename matches 'Egodeath public'
-        if filename == 'egodeath_public.csv':
-            # List of columns to exclude
-            excluded_columns = [
-                'fbclid',
-                'Randomize (bxu0awp)',
-                'surrealdalifacefixed',
-                'Randomize (jzmxrr)',
-                'dissolvefireflydarkwoods',
-                's',
-                'utm_source',
-                'utm_medium',
-                'Randomize (h3axmqx)'
-            ]
-            # Drop the excluded columns if they exist in the DataFrame
-            df = df.drop(columns=[col for col in excluded_columns if col in df.columns])
-            #print(f"Dropped columns {excluded_columns} from DataFrame for file '{filename}'.")
+        # Define processing rules for each file type
+        processors = {
+            'egodeath_public.csv': self._process_egodeath,
+            'consentresultspublic.csv': self._process_consent_results,
+            'relationships_raw data_public.csv': self._process_relationships,
+            'chaos_survey_public.csv': self._process_chaos_survey,
+            'correlations_kink_survey_females.csv': self._process_kink_survey,
+            'correlations_kink_survey_males.csv': self._process_kink_survey,
+            'rationalist_raw_data_public.csv': self._process_rationalist,
+            'gender_and_valence_average_ratings.csv': self._process_gender_valence_avg,
+            'taboo-ratings-v3.csv': self._process_taboo_ratings,
+            'raw_gender_and_valence_data_masculinity_femininity_ratings.csv': self._process_raw_gender_valence,
+            'correlation_chart_for_childhood_survey_public.csv': self._process_childhood_survey
+        }
 
-            # Remove '(...)' from header names
-            pattern = r'\s*\([^)]*\)'  # Matches '(...)' and any preceding whitespace
-            df.columns = df.columns.str.replace(pattern, '', regex=True)
-            #print("Removed '(...)' from all column headers.")
-
-            # Optionally, clean up any resulting double spaces and strip whitespace
-            df.columns = df.columns.str.replace(r'\s+', ' ', regex=True).str.strip()
-            #print("Cleaned up spaces in column headers.")
-
-        # Check if the filename matches 'ConsentResultsPublic'
-        elif filename == 'consentresultspublic.csv':
-            # Define the regex pattern to match:
-            # 1. 'This is: (...)' with any trailing spaces
-            # 2. '(...)' with any trailing spaces
-            # The pattern uses a non-capturing group for the optional 'This is:' part
-            pattern = r'(?:This is:\s*)?\(.*?\)\s*'
-
-            # Apply the static method to clean all column names
-            new_columns = [self.clean_column(col, pattern) for col in df.columns]
-            df.columns = new_columns
-            #print(f"Removed substrings matching 'This is: (...)' or '(...)' from column headers for file '{filename}'.")
-
-        # Check if the filename matches 'Relationships Raw Data Public'
-        elif filename == 'relationships_raw data_public.csv':
-            # Define the regex pattern to match '(...)' with any trailing spaces
-            pattern = r'\(.*?\)\s*'
-
-            # Apply the static method to clean all column names
-            new_columns = [self.clean_column(col, pattern) for col in df.columns]
-            df.columns = new_columns
-            #print(f"Removed all '(...)' substrings from column headers for file '{filename}'.")
-
-        # Check if the filename matches 'Chaos Survey Public'
-        elif filename == 'chaos_survey_public.csv':
-            #print("Length of the dataframe: ", len(df))
-            df = df.iloc[:952]  
-            #print(f"Dropped end rows. DataFrame now has {len(df)} rows.")
-
-            # Remove all columns that contain the substring 'Randomize'
-            columns_to_remove = [col for col in df.columns if 'Randomize' in col]
-            df = df.drop(columns=columns_to_remove)
-            #print(f"Removed columns containing 'Randomize': {columns_to_remove} from DataFrame for file '{filename}'.")
-
-            # Define the regex pattern to match '(...)' with any trailing spaces
-            pattern = r'\(.*?\)\s*'
-
-            # Apply the static method to clean all remaining column names
-            new_columns = [self.clean_column(col, pattern) for col in df.columns]
-            df.columns = new_columns
-            #print(f"Removed all '(...)' substrings from column headers for file '{filename}'.")
-
-        # Check if the filename matches 'correlations KINKSURVEYDONE2'
-        elif filename == 'correlations_kink_survey_females.csv' or filename == 'correlations_kink_survey_males.csv':
-            # Remove all columns that have all blank entries
-            # Define what constitutes a "blank" entry (e.g., NaN, empty string, etc.)
-            # Here, we'll consider NaN and empty strings as blank
-            # First, replace empty strings with NaN
-            df.replace(r'^\s*$', pd.NA, regex=True, inplace=True)
-
-            # Identify columns where all entries are NaN
-            columns_with_all_blanks = df.columns[df.isna().all()].tolist()
-
-            # Drop these columns
-            df = df.drop(columns=columns_with_all_blanks)
-            #print(f"Removed columns with all blank entries: {columns_with_all_blanks} from DataFrame for file '{filename}'.")
-
-        # Check if the filename matches 'How Rationalist Are You raw data public'
-        elif filename == 'rationalist_raw_data_public.csv':
-            # Define the regex pattern to match '(...)' with any trailing spaces
-            pattern = r'\(.*?\)\s*'
-
-            # Apply the static method to clean all column names
-            new_columns = [self.clean_column(col, pattern) for col in df.columns]
-            df.columns = new_columns
-            #print(f"Removed all '(...)' substrings from column headers for file '{filename}'.")
-
-            # Keep the first 14 columns as they are
-            columns_to_keep = list(df.columns[:14])
-
-            # For columns starting from the 15th, keep only every other column (15, 17, 19, etc.)
-            columns_to_keep.extend(df.columns[14::2])
-
-            # Keep only the selected columns
-            df = df[columns_to_keep]
-            #print(f"Kept only specific columns starting from the 15th header for file '{filename}'.")
-
-        # Check if the filename matches 'Gender And Valence Avg Ratings'
-        elif filename == 'gender_and_valence_average_ratings.csv':
-            # Set the first row as the column headers
-            df.columns = df.iloc[0]
-            # Remove the first row and reset the index
-            df = df.iloc[1:].reset_index(drop=True)
-            #print("Set the first row as column headers and removed it from the data.")
-
-            # Remove the 'thing?' column if it exists
-            if 'thing?' in df.columns:
-                df = df.drop(columns=['thing?'])
-                #print("Removed the 'thing?' column.")
-
-            # List of columns to process
-            columns_to_process = ['trait', 'sex, gender, and bodies', 'people', 'place', 'politics', 'concept/action/state?']
-
-            # Replace 'x' with 1 and blanks with 0 in specified columns
-            for col in columns_to_process:
-                if col in df.columns:
-                    df[col] = df[col].apply(lambda x: 1 if x == 'x' else (0 if pd.isna(x) or x == '' else x))
-            #print(f"Replaced 'x' with 1 and blanks with 0 in columns: {columns_to_process}")
-
-        # Check if the filename matches 'taboo-ratings'
-        elif filename == 'taboo-ratings-v3.csv':
-            # Define the regex pattern to match '(...)' with any trailing spaces
-            pattern = r'\(.*?\)\s*'
-
-            # Remove the 'Position' and 's' columns
-            columns_to_remove = ['Position', 's']
-            df = df.drop(columns=[col for col in columns_to_remove if col in df.columns], errors='ignore')
-            #print(f"Removed columns: {columns_to_remove}")
-
-            # Apply the static method to clean all column names
-            new_columns = [self.clean_column(col, pattern) for col in df.columns]
-            df.columns = new_columns
-            #print(f"Removed all '(...)' substrings from column headers for file '{filename}'.")
-
-            # Drop 'arousalScale' and any columns containing 'Randomize'
-            columns_to_drop = [col for col in df.columns if 'Randomize' in col or col == 'arousalScale']
-            df = df.drop(columns=columns_to_drop)
-            #print(f"Dropped 'arousalScale' and columns containing 'Randomize': {columns_to_drop}")
-
-            # Keep the first 20 columns
-            columns_to_keep = list(df.columns[:20])
-
-            # For columns starting from the 21st, keep only every other column (21, 23, 25, etc.)
-            columns_to_keep.extend([df.columns[i] for i in range(20, len(df.columns), 2)])
-
-            # Keep only the selected columns
-            df = df[columns_to_keep]
-            #print(f"Kept first 20 columns and every other column starting from the 21st for file '{filename}'.")
-
-            # Print the final column names for verification
-            #print(f"Final columns: {df.columns.tolist()}")
-
-        # Check if the filename matches 'Raw Gender And Valence Data'
-        elif filename == 'raw_gender_and_valence_data_masculinity_femininity_ratings.csv':
-            # Define the regex pattern to match '(...)' with any trailing spaces
-            pattern = r'\(.*?\)\s*'
-
-            # Remove all columns that contain the substring 'Randomize'
-            columns_to_remove = [col for col in df.columns if 'Randomize' in col]
-            df = df.drop(columns=columns_to_remove)
-            #print(f"Removed columns containing 'Randomize': {columns_to_remove}")
-
-            # Clean the second header specifically
-            df.columns.values[1] = self.clean_column(df.columns[1], pattern)
-            #print(f"Removed '(...)' from the second header: {df.columns[1]}")
-
-            # Clean headers starting from the 7th one
-            new_columns = list(df.columns[:6])  # Keep first 6 headers unchanged (except the 2nd one which we just cleaned)
-            new_columns.extend([self.clean_column(col, pattern) for col in df.columns[6:]])
-            df.columns = new_columns
-            #print(f"Removed all '(...)' substrings from headers starting from the 7th header for file '{filename}'.")
-
-            # Keep the first 8 columns as they are
-            columns_to_keep = list(df.columns[:8])
-
-            # For columns starting from the 9th, keep only every other column (9, 11, 13, etc.)
-            columns_to_keep.extend(df.columns[8::2])
-
-            # Keep only the selected columns
-            df = df[columns_to_keep]
-            #print(f"Kept only specific columns starting from the 9th header for file '{filename}'.")
-
-        # Check if the filename matches 'Correlation Chart for the Childhood Survey (Public)'
-        elif filename == 'correlation_chart_for_childhood_survey_public.csv':
-            # Define the regex pattern to match '(...)' with any trailing spaces
-            pattern = r'\(.*?\)\s*'
-
-            # Apply the static method to clean all column names
-            new_columns = [self.clean_column(col, pattern) for col in df.columns]
-            df.columns = new_columns
-            #print(f"Removed all '(...)' substrings from column headers for file '{filename}'.")
-
-            # Set the first column as the index
-            #df.set_index(df.columns[0], inplace=True)
-            #print(f"Set the first column as the index for file '{filename}'.")
-
-        else:
-            #print(f"No modifications applied. Filename '{filename}' does not match any criteria.")
-            pass 
+        # Apply specific processing if file has custom rules
+        if filename in processors:
+            df = processors[filename](df)
 
         # Apply general cleaning operations
         df = self.apply_general_cleaning(df)
-
-        # Handle duplicate column names
         df = self.handle_duplicate_columns(df)
 
+        return {filename: df}
+
+    def _process_egodeath(self, df):
+        excluded_columns = [
+            'fbclid', 'Randomize (bxu0awp)', 'surrealdalifacefixed',
+            'Randomize (jzmxrr)', 'dissolvefireflydarkwoods', 's',
+            'utm_source', 'utm_medium', 'Randomize (h3axmqx)'
+        ]
+        df = df.drop(columns=[col for col in excluded_columns if col in df.columns])
+        df.columns = self._clean_headers(df.columns)
         return df
+
+    def _process_consent_results(self, df):
+        pattern = r'(?:This is:\s*)?\(.*?\)\s*'
+        df.columns = [self.clean_column(col, pattern) for col in df.columns]
+        return df
+
+    def _process_relationships(self, df):
+        pattern = r'\(.*?\)\s*'
+        df.columns = [self.clean_column(col, pattern) for col in df.columns]
+        return df
+
+    def _process_chaos_survey(self, df):
+        df = df.iloc[:952]
+        df = self._remove_randomize_columns(df)
+        df.columns = self._clean_headers(df.columns)
+        return df
+
+    def _process_kink_survey(self, df):
+        df.replace(r'^\s*$', pd.NA, regex=True, inplace=True)
+        columns_with_all_blanks = df.columns[df.isna().all()].tolist()
+        return df.drop(columns=columns_with_all_blanks)
+
+    def _process_rationalist(self, df):
+        df.columns = self._clean_headers(df.columns)
+        columns_to_keep = list(df.columns[:14])
+        columns_to_keep.extend(df.columns[14::2])
+        return df[columns_to_keep]
+
+    def _process_gender_valence_avg(self, df):
+        df.columns = df.iloc[0]
+        df = df.iloc[1:].reset_index(drop=True)
+        if 'thing?' in df.columns:
+            df = df.drop(columns=['thing?'])
+
+        columns_to_process = ['trait', 'sex, gender, and bodies', 'people',
+                            'place', 'politics', 'concept/action/state?']
+
+        for col in columns_to_process:
+            if col in df.columns:
+                df[col] = df[col].apply(lambda x: 1 if x == 'x' else (0 if pd.isna(x) or x == '' else x))
+        return df
+
+    def _process_taboo_ratings(self, df):
+        df = df.drop(columns=[col for col in ['Position', 's'] if col in df.columns], errors='ignore')
+        df.columns = self._clean_headers(df.columns)
+        df = self._remove_randomize_columns(df)
+        df = df.drop(columns=[col for col in df.columns if col == 'arousalScale'])
+
+        columns_to_keep = list(df.columns[:20])
+        columns_to_keep.extend([df.columns[i] for i in range(20, len(df.columns), 2)])
+        return df[columns_to_keep]
+
+    def _process_raw_gender_valence(self, df):
+        df = self._remove_randomize_columns(df)
+        pattern = r'\(.*?\)\s*'
+        df.columns.values[1] = self.clean_column(df.columns[1], pattern)
+
+        new_columns = list(df.columns[:6])
+        new_columns.extend([self.clean_column(col, pattern) for col in df.columns[6:]])
+        df.columns = new_columns
+
+        columns_to_keep = list(df.columns[:8])
+        columns_to_keep.extend(df.columns[8::2])
+        return df[columns_to_keep]
+
+    def _process_childhood_survey(self, df):
+        df.columns = self._clean_headers(df.columns)
+        return df
+
+    def _clean_headers(self, columns, pattern=r'\s*\([^)]*\)'):
+        """Clean column headers by removing patterns and extra spaces"""
+        cleaned = columns.str.replace(pattern, '', regex=True)
+        return cleaned.str.replace(r'\s+', ' ', regex=True).str.strip()
+
+    def _remove_randomize_columns(self, df):
+        """Remove all columns containing 'Randomize'"""
+        return df.drop(columns=[col for col in df.columns if 'Randomize' in col])
 
     @staticmethod
     def clean_column(col_name: str, pattern: str) -> str:
@@ -1535,31 +1482,22 @@ class ModifyDataFrameProcessor(DataFrameProcessor):
         Returns:
             pd.DataFrame: The cleaned DataFrame with reset index.
         """
-        # Replace all spaces with underscores in column headers
-        #df.columns = df.columns.str.replace(' ', '_')
-        #print("Replaced all spaces with underscores in column headers.")
-
         # Remove columns with blank or NaN headers
         df = df.loc[:, df.columns.notna()]  # Remove columns with NaN headers
         df = df.loc[:, df.columns != '']    # Remove columns with empty string headers
-        #print("Removed columns with blank or NaN headers.")
 
         # Remove columns with 'unnamed' in the header
         unnamed_columns = [col for col in df.columns if 'unnamed' in col.lower()]
         df = df.drop(columns=unnamed_columns)
-        #print(f"Removed columns with 'unnamed' in the header: {unnamed_columns}")
 
         # Remove rows that are entirely blank or NaN
         df = df.dropna(how='all')
-        #print(f"Removed {df.shape[0]} rows that were entirely blank or NaN.")
 
         # Remove rows where all entries are empty strings
         df = df[(df.applymap(lambda x: str(x).strip() != '') != False).any(axis=1)]
-        #print(f"Removed rows where all entries were empty strings. DataFrame now has {df.shape[0]} rows.")
 
         # Reset the index
         df = df.reset_index(drop=True)
-        #print(f"Reset DataFrame index. DataFrame now has {df.shape[0]} rows.")
         return df
 
     def handle_duplicate_columns(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -1590,6 +1528,7 @@ class ModifyDataFrameProcessor(DataFrameProcessor):
 
 class CSVAnalyzer(Utilities):
     """analyze the csv file and generate a description based on the headers - also rename illusive header names to make it easier for the model to understand what to do"""
+
     def __init__(self, settings, sector_settings):
         super().__init__()
         self.settings = settings
@@ -1597,15 +1536,15 @@ class CSVAnalyzer(Utilities):
         # define the strategy for processing the csv files
         self.processor = ReturnDataFrameProcessor() # this can be changed depending on the task
 
+        # define the column headers cache
+        self.column_headers_cache: Dict[str, str] = {}
+        self.column_headers_cache_check: Dict[str, type] = {}
+
         # define the sector settings
         self.sector_settings = sector_settings
 
-        # define the model to be used for summarization
-        self.model = ChatOpenAI(
-            model_name=self.settings.csv_analysis_model,
-            temperature=self.settings.summary_temp
-        )
-        self.prompt_template = ChatPromptTemplate.from_template("""
+        # define the description template
+        self.description_template = ChatPromptTemplate.from_template("""
         Analyze CSV file: {num_rows} rows, {num_cols} columns.
         Stats: {column_stats}
         Headers and sample data:
@@ -1622,6 +1561,7 @@ class CSVAnalyzer(Utilities):
         Response: Single paragraph, concise, information-dense. Include specific column names, data types, and key statistics where relevant.
         """)
 
+        # define the acronym template
         self.acronym_template_baseline = ChatPromptTemplate.from_template("""
         In the context of the {industry} industry, is the following column header an acronym: {header}?
         If it is an acronym, provide its full meaning. If it's not an acronym, respond with "Not an acronym".
@@ -1641,59 +1581,84 @@ class CSVAnalyzer(Utilities):
         Response: Determine if the header is an acronym and provide the full meaning if it is.
         """)
 
-        self.acronym_template = ChatPromptTemplate.from_template("""
+        # define the edit header template
+        self.edit_header_template = ChatPromptTemplate.from_template("""
         In the context of the {industry} industry, analyze the following column header: {header}
 
-        1. Correct any typos.
-        2. Format it nicely (e.g., split any words that have become one word, capitalize appropriately).
-        3. Do not change the meaning of the header.
+        Here's the first few rows of the dataframe to provide context:
+        {df_head}
+
+        1. Correct any typos and expand any acronyms if you think it is needed.
+        2. Format it nicely (split any words that have become one word, use camel case, no special characters).
+        3. Do not change the meaning of the header. Make the header name as concise as possible, so no parenthesis.
+        4. Use the actual data in the column to make the header more specific and clear.
+        5. Keep the header name as short as possible and make sure it does not conflict with any other column names thus far: {renamed_headers}
 
         Format your response as follows:
         Processed header: [Your processed version or original if no changes are needed]
 
         Examples:
-        1. Input: "revenueTotal"
-           Processed header: "Revenue Total"
+        1. Input: "revenueTotal" with data showing yearly revenue figures
+           Processed header: "Annual Revenue Total"
 
-        2. Input: "custmer_satsfacton"
-           Processed header: "Customer Satisfaction"
+        2. Input: "custmer_satsfacton" with ratings from 1-5
+           Processed header: "Customer Satisfaction Rating (1-5)"
 
-        Now, please analyze this header: {header}
+        3. Input: "Name" with department names like "Sales", "Marketing"
+           Processed header: "Department Name"
+
+        Now, please analyze this header using the actual data shown above: {header}
         """)
 
-    def manual_file_upload(self) -> Tuple[str, Dict[str, str]]:
-        """
-        Manually upload a CSV file for analysis.
-        """
-        pass
-
-    def process_header(self, header: str, industry: str) -> str:
+    def process_header(self, header: str, industry: str, df_head: pd.DataFrame, renamed_headers: list) -> str:
         """
         Process a single header to determine if it's an acronym and clarify if necessary.
+        Skips processing if the column contains numerical data.
 
         Args:
             header (str): The column header to process.
             industry (str): The industry sector for context.
+            df_head (pd.DataFrame): First few rows of the dataframe for context.
 
         Returns:
-            str: The original header if not an acronym, or the clarified version if it is.
+            str: The original header if column is numerical or if processing fails,
+                 or the clarified version if successfully processed.
         """
-        messages = self.acronym_template.format_messages(
+        # Check if column data is numerical
+        if df_head[header].dtype in ['int64', 'float64']:
+            #print(f"Skipping header for numerical column: {header}")
+            return header
+
+        messages = self.edit_header_template.format_messages(
             industry=industry,
-            header=header
+            header=header,
+            df_head=df_head,
+            renamed_headers=renamed_headers
         )
 
         try:
-            output = self.model(messages)
+            output = self.baseline_setup_model(messages)
             response = output.content.strip().lower()
 
-            if "is acronym: yes" in response:
-                # Look for the full meaning
-                full_meaning_match = re.search(r'full meaning:(.+)', response, re.IGNORECASE)
-                if full_meaning_match:
-                    return full_meaning_match.group(1).strip()
+            # Extract header between quotes and format it
+            header_match = re.search(r'"([^"]*)"', response)
+            if header_match:
+                # Get the header and clean it
+                formatted_header = header_match.group(1)
 
-            # If we can't find a full meaning or it's not an acronym, return the original header
+                # Remove parenthetical content
+                formatted_header = re.sub(r'\s*\([^)]*\)', '', formatted_header)
+
+                # Remove any remaining parentheses just in case
+                formatted_header = formatted_header.replace('(', '').replace(')', '').replace("'", "")
+
+                # Clean up extra spaces and replace with underscores
+                formatted_header = re.sub(r'\s+', ' ', formatted_header).strip()
+                formatted_header = formatted_header.replace(' ', '_')
+
+                return formatted_header
+
+            # If we can't find a processed header, return the original header
             return header
         except Exception as e:
             print(f"Error processing header '{header}': {str(e)}")
@@ -1712,10 +1677,24 @@ class CSVAnalyzer(Utilities):
         """
         headers = df.columns.tolist()
         renamed_headers = {}
-        #print(headers)
+
+        # iterate through the headers and process them
         for header in tqdm(headers):
-            #print(f'processing the header: {header}')
-            clarified_header = self.process_header(header, industry)
+            # check if the header is in the cache and if the dtype is the same
+            if header in self.column_headers_cache and df[header].dtype == self.column_headers_cache_check[header]:
+                # if the header is in the cache and the dtype is the same, use the cached header
+                clarified_header = self.column_headers_cache[header]
+            else:
+                # if the header is not in the cache or the dtype is different, process the header
+                clarified_header = self.process_header(header, industry, df.head(3), list(renamed_headers.keys()))
+
+                # add the clarified header to the cache
+                self.column_headers_cache[header] = clarified_header
+
+                # add the dtype of the header to the cache
+                self.column_headers_cache_check[header] = df[header].dtype
+
+            # add the clarified header to the renamed headers
             renamed_headers[header] = clarified_header
 
         return renamed_headers
@@ -1731,58 +1710,63 @@ class CSVAnalyzer(Utilities):
         return df_full
 
     def _generate_column_stats(self, df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
-        stats_start = time.time()
         column_stats = self._get_column_stats(df)
-        stats_end = time.time()
-        #print(f"Time to generate column stats: {stats_end - stats_start:.2f} seconds")
         return column_stats
 
     def _create_sample_data(self, df: pd.DataFrame) -> str:
-        df_sample = df.head()
+        df_sample = df.head(3)
         return df_sample.to_string(index=False)
 
     def _generate_description(self, num_rows: int, num_cols: int, column_stats: Dict[str, Dict[str, Any]], sample_data: str) -> str:
-        prompt_start = time.time()
-        messages = self.prompt_template.format_messages(
+        """
+        Generate a description of the CSV file using the model.
+        """
+        print('sample_data: ', sample_data)
+        messages = self.description_template.format_messages(
             num_rows=num_rows,
             num_cols=num_cols,
             column_stats=column_stats,
             sample_data=sample_data
         )
-        prompt_end = time.time()
-        #print(f"Time to format prompt: {prompt_end - prompt_start:.2f} seconds")
 
-        model_start = time.time()
         try:
-            output = self.model(messages)
-            model_end = time.time()
-            #print(f"Time for model to generate description: {model_end - model_start:.2f} seconds")
+            output = self.baseline_setup_model(messages)
             return output.content.strip()
         except Exception as e:
-            #print(f"Error in model generation: {str(e)}")
             return f"Error generating description: {str(e)}"
 
-    def _handle_analysis_error(self, e: Exception, csv_file_path: str, start_time: float) -> Tuple[str, Dict[str, str]]:
-        end_time = time.time()
-        total_time = end_time - start_time
-        print(f"Error occurred. Total time for {self.sanitize_file_path(csv_file_path)}: {total_time:.2f} seconds")
-        return f"Error analyzing CSV file: {str(e)}", {}
-
-    def _save_revised_csv_file(self, df: pd.DataFrame, csv_file_path: str) -> None:
+    def _save_revised_csv_file(self, df: pd.DataFrame, csv_file_path: str, renamed_headers: dict = None, postgres_mode: bool = True) -> pd.DataFrame:
         """
-        Save the revised CSV file to the specified path.
+        Save the revised CSV file with renamed headers to the specified path.
 
         Args:
             df (pd.DataFrame): The DataFrame to save.
             csv_file_path (str): The path to save the CSV file.
+            renamed_headers (dict): Dictionary mapping original headers to new headers.
+                                  Example: {'old_name': 'new_name'}
         """
+        if renamed_headers:
+            # Create a mapping dictionary that includes all columns
+            # If column not in renamed_headers, keep original name
+            final_headers = {
+                col: renamed_headers.get(col, col)
+                for col in df.columns
+            }
 
-        # save the dataframe to a csv file
-        df.to_csv(csv_file_path, index=False)
+            # Rename the columns
+            df = df.rename(columns=final_headers)
+
+        # Save the dataframe to a csv file
+        if postgres_mode:
+            self.csv_db_handler.upload_csv(csv_path=csv_file_path, table_name=self.storage_settings.csv_db_table_name, name=csv_file_path)
+        else:
+            df.to_csv(csv_file_path, index=False)
+        return df
 
     def generate_csv_description(self, csv_file_path: str) -> Tuple[str, Dict[str, str]]:
         """
         Generate a concise description of a CSV file using GPT model.
+        First renames headers, then generates description.
 
         Args:
             csv_file_path (str): Path to the CSV file to be analyzed.
@@ -1790,37 +1774,32 @@ class CSVAnalyzer(Utilities):
         Returns:
             Tuple[str, Dict[str, str]]: A tuple containing the description and the renamed headers metadata.
         """
-        start_time = time.time()
+
         try:
-            # read the dataframe into pandas and then clean the column names and unnecessary rows/columns
+            # 1. Read and process the CSV file
             df_full = self._read_and_process_csv(csv_file_path)
 
-            # generate statistics about the dataframe 
-            num_rows, num_cols = df_full.shape
-            column_stats = self._generate_column_stats(df_full)
-
-            # create a sample based on the top 5 items in the dataset
-            sample_data = self._create_sample_data(df_full)
-
-            # generate a description of the dataset based on the sample just created
-            description = self._generate_description(num_rows, num_cols, column_stats, sample_data)
-
-            # get the headers that are renamed based on the corrected dataframe
+            # 2. Generate and apply header renaming
             renamed_headers_metadata = self.generate_renamed_headers_metadata(df_full)
 
-            # Upload the processed CSV file to Dropbox
-            self._save_revised_csv_file(df_full, csv_file_path) # saved to the original file path
+            # 3. Apply the renamed headers to the dataframe
+            df_full = self._save_revised_csv_file(df_full, csv_file_path, renamed_headers_metadata, postgres_mode=self.settings.postgres_mode)
 
-            # upload the file to dropbox if the setting is enabled - KEEP DISABLED IF CLIENT DOES NOT USE DROPBOX 
+            # 4. Generate statistics and description with renamed headers
+            num_rows, num_cols = df_full.shape
+            column_stats = df_full.columns.tolist() #self._generate_column_stats(df_full)
+
+            sample_data = self._create_sample_data(df_full)
+            description = self._generate_description(num_rows, num_cols, column_stats, sample_data)
+
+            # 5. Handle external upload if enabled
             if not self.settings.disable_external_upload:
                 self._upload_to_dropbox(csv_file_path)
 
-            end_time = time.time()
-            total_time = end_time - start_time
-            print(f"Total time for {self.sanitize_file_path(csv_file_path)}: {total_time:.2f} seconds")
             return description, renamed_headers_metadata
+
         except Exception as e:
-            return self._handle_analysis_error(e, csv_file_path, start_time)
+            print(e)
 
     def _get_column_stats(self, df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
         """
@@ -1902,7 +1881,7 @@ class DropboxDownloader(FileDownloader):
 
 class ManualDownloader(FileDownloader):
     """Concrete implementation of FileDownloader for manual downloads."""
-    
+
     def __init__(self, tool: Any):
         self.tool = tool
 
@@ -1922,11 +1901,11 @@ class MultiModalDocumentProcessor(VectorDB):
     def format_processed_batch(self, embeddings_batch: list, base64_images: list, file_path: str) -> list:
         """
         Process a batch of images using Voyage AI's multimodal embedding model
-        
+
         Args:
             batch_data: List of tuples containing (idx, (image, base64_image))
             file_path: Source file path
-            
+
         Returns:
             list: Processed batch data with embeddings
         """
@@ -1937,18 +1916,18 @@ class MultiModalDocumentProcessor(VectorDB):
         for page_number, embedding in enumerate(embeddings_batch):
             # convert the embedding to a numpy array of floats
             embedding = np.array(embedding[0], dtype=np.float32)
-            
+
             # follow the schema of the document database
             formatted_batch.append(
                 {
                 'vector': embedding,
                 'page_image_bytes': base64_images[page_number],  # Assuming base64_images is indexed by page number
-                'source': file_path,
+                'source': os.path.basename(file_path),
                 'page': page_number + 1
                 }
             )
         return formatted_batch
-
+    
     @staticmethod
     def render_image_from_bytes(byte_string: bytes) -> Image:
         """
@@ -1990,27 +1969,27 @@ class MultiModalDocumentProcessor(VectorDB):
 
         # Pair embeddings with their page numbers
         return list(zip(result.embeddings, pages))
-    
+
     def generate_multi_modal_embeddings(self, batches: list, base64_images: list, file_path: str) -> list:
         """
         Generate multi modal documents using concurrent batch processing.
-        
+
         Args:
             images: List of PIL images
             base64_images: List of base64 encoded images
             file_path: Source file path
-            
+
         Returns:
             list: Document dictionaries with embeddings
         """
-       
+
         # define the container for the embeddings
         all_embeddings = []
 
         # Use ThreadPoolExecutor to run tasks concurrently
-        with ThreadPoolExecutor(max_workers=4) as executor:
+        with ThreadPoolExecutor(max_workers=self.settings.multimodal_concurrent_workers) as executor:
             # Map the process_inputs function to the input_batches
-            results = list(executor.map(self.create_embeddings, batches))
+            results = list(tqdm(executor.map(self.create_embeddings, batches), total=len(batches)))
 
         # Combine embeddings from all batches
         all_embeddings = []
@@ -2022,7 +2001,7 @@ class MultiModalDocumentProcessor(VectorDB):
 
         return formatted_batch
 
-    def encode_single_image(self, idx_and_image):
+    def encode_single_image(self, idx_and_image, format: str = 'JPEG'):
         """
         Encode a single image and return the base64 string.
         """
@@ -2030,23 +2009,20 @@ class MultiModalDocumentProcessor(VectorDB):
         try:
             # Create a copy of the image to prevent concurrent access issues
             image_copy = image.copy()
-            base64_str = self.get_base64_image(image_copy)
-            
-            # Debug print to check uniqueness
-            #print(f"Image {idx} hash: {hash(base64_str[:100])}")
-            
+            base64_str = self.get_base64_image(image_copy, format=format)
+
             return idx, base64_str
         except Exception as e:
-            #print(f"Error encoding image {idx}: {str(e)}")
+            print(f"Error encoding image {idx}: {str(e)}")
             return idx, None
 
-    def create_batch_base64_images(self, images: list) -> list:
+    def create_batch_base64_images(self, images: list, format: str = 'JPEG') -> list:
         """
         Create base64 encodings for a batch of images using concurrent processing.
-        
+
         Args:
             images: List of PIL images to encode.
-            
+
         Returns:
             list: List of base64 encoded images.
         """
@@ -2058,9 +2034,9 @@ class MultiModalDocumentProcessor(VectorDB):
         # Use ThreadPoolExecutor for concurrent processing
         with ThreadPoolExecutor(max_workers=50) as executor:
             # Submit tasks for each image
-            futures = [executor.submit(self.encode_single_image, (idx, img)) 
+            futures = [executor.submit(self.encode_single_image, (idx, img), format=format)
                       for idx, img in indexed_images]
-            
+
             # Collect results as they complete
             for future in as_completed(futures):
                 try:
@@ -2072,29 +2048,39 @@ class MultiModalDocumentProcessor(VectorDB):
 
         # Remove any None values from failed encodings
         base64_images = [img for img in base64_images if img is not None]
-        
-        # Verify uniqueness of results
-        unique_hashes = len(set(hash(b[:100]) for b in base64_images))
-        print(f"Number of unique encodings: {unique_hashes} out of {len(base64_images)}")
 
         return base64_images
+
+    def download_pdf_as_images(self, file_path: str) -> list:
+        """Download the PDF as a list of images or load them locally."""
+
+        # make the multimodal_images folder if it does not exist
+        os.makedirs('/multimodal_images', exist_ok=True)
+
+        if self.settings.multimodal_images_download:
+            # Load images from the local directory
+            print('Downloading PDF as images...')
+            return convert_from_path(file_path, fmt='jpeg', thread_count=8, output_folder='/multimodal_images')
+        else:
+            # Convert the PDF to images and save them in the specified folder
+            return convert_from_path(file_path, fmt='jpeg', thread_count=8)
 
     def document_pdf_image_embeddings(self, file_path: str, scaling: bool = False) -> list:
         """
         Process PDF files, treating each page as a separate document and image.
-        
+
         Args:
             file_path: Path to the PDF file.
-            
+
         Returns:
             list: Processed documents with embeddings.
         """
         # Construct full file path using the download path model
-        full_path = self.download_path_model.pdf_path + file_path
+        full_path = self.download_path_model.pdf_path + '/' + file_path
         print('Processing file:', full_path)
 
         # Convert each page of the PDF to images
-        images = convert_from_path(full_path, fmt='jpg', thread_count=8)
+        images = self.download_pdf_as_images(full_path)
 
         # Scale the images to a specific width
         if scaling:
@@ -2105,9 +2091,14 @@ class MultiModalDocumentProcessor(VectorDB):
 
         # create the batches of images with their indices
         batches = [[(j+1, img) for j, img in enumerate(images[i:i + self.settings.embedding_batch_size], start=i)] for i in range(0, len(images), self.settings.embedding_batch_size)]
-     
+
         # generate the embeddings
-        return self.generate_multi_modal_embeddings(batches, base64_images, full_path)
+        results = self.generate_multi_modal_embeddings(batches, base64_images, full_path)
+
+        # Delete the entire multimodal_images folder
+        shutil.rmtree('multimodal_images', ignore_errors=True)
+
+        return results
 
 
 class DataLoader(MultiModalDocumentProcessor):
@@ -2151,11 +2142,11 @@ class DataLoader(MultiModalDocumentProcessor):
         try:
             # define the pipeline index
             self.pipeline_idx: dict = dict(zip(
-                self.settings.dirs, [self._table_pipeline, self._markdown_pipeline, self._text_pipeline_multimodal]
+                self.settings.dirs, [self._text_pipeline_multimodal, self._table_pipeline, self._markdown_pipeline]
             ))
         except (KeyError, ValueError):
             raise Exception("Length of pipelines index does not match directory index")
-        
+
         # define the uploader
         self.download_file_idx = {
             'auto': DropboxDownloader(self.dbx, self.download_path_model, self.download_from_dropbox),
@@ -2333,12 +2324,12 @@ class DataLoader(MultiModalDocumentProcessor):
                 print("Document missing required attributes during CSV chunk processing")
 
         return new_splits
-    
+
     def process_table_descriptions(self, description: str, file_path: str, renamed_headers: Dict[str, str]) -> List[dict]:
         """Process table descriptions for input into LanceDB"""
 
         # Read the CSV file to get additional information
-        try: 
+        try:
             df = pd.read_csv(file_path)
         except FileNotFoundError:
             print(f'File not found: {file_path}, returning empty list')
@@ -2354,7 +2345,7 @@ class DataLoader(MultiModalDocumentProcessor):
                 'renamed_headers': renamed_headers,
                 'original_headers': df.columns.tolist(),
                 'row_count': len(df),
-                'column_count': len(df.columns), 
+                'column_count': len(df.columns),
                 'full_dataframe': df.to_dict(orient='records')
             }
         )
@@ -2377,10 +2368,10 @@ class DataLoader(MultiModalDocumentProcessor):
     def _documents_pdf_reader(self, file_path: str = "", ocr_mode: bool = False):
         """read the documents in a particular PDF file"""
 
-        # check if ocr mode is on 
+        # check if ocr mode is on
         if not ocr_mode:
-            try: 
-                # define the loader from langchain default 
+            try:
+                # define the loader from langchain default
                 loader = PyPDFLoader(f'{self.download_path_model.pdf_path}{file_path}')
 
                 # load the documents
@@ -2425,7 +2416,7 @@ class DataLoader(MultiModalDocumentProcessor):
         # define the splitting mechanism
         splitter_tool: Any = self.create_splitter()['pdf']
 
-        # create the splits in each of the pages of equal token size 
+        # create the splits in each of the pages of equal token size
         all_splits = splitter_tool.split_documents(docs_raw)
 
         # process each of the splits by cleaning the text and putting it into the correct format for the vector database
@@ -2433,13 +2424,13 @@ class DataLoader(MultiModalDocumentProcessor):
 
         # delete the file or move it to the manual upload directory
         if not self.settings.retain_files_condition:
-            self.delete_file(f'{self.download_path_model.pdf_path}{file_path}')
-        #else: 
+            self.delete_file(f'{self.download_path_model.pdf_path}/{file_path}')
+        #else:
         #    print('in move file manually')
         #    self.manual_move_file_back(file_path, local_dir=self.download_path_model.pdf_path)
 
         # load the documents into the vector store, document type 1 is for pdf/text
-        self.load_documents(docs, document_type=1, batch_size=self.settings.embedding_batch_size)      
+        self.load_documents(docs, document_type=1, batch_size=self.settings.embedding_batch_size)
 
     def _text_pipeline_multimodal(self, file_path: str) -> None:
         """process the text pipeline with multimodal embeddings"""
@@ -2447,26 +2438,26 @@ class DataLoader(MultiModalDocumentProcessor):
         # Download the file from Dropbox into the pdf/text folder
         self.downloader.download(file_path, download=True)
 
-        # generate the multimodal embeddings and the container for lancedb table entry 
+        # generate the multimodal embeddings and the container for lancedb table entry
         container = self.document_pdf_image_embeddings(file_path, scaling=False)
 
-        # delete the file 
+        # delete the file
         if not self.settings.retain_files_condition:
-            self.delete_file(f'{self.download_path_model.pdf_path}{file_path}')
+            self.delete_file(f'{self.download_path_model.pdf_path}/{file_path}')
 
         # load the documents into the vector store, document type 1 is for pdf/text
         self.load_documents(container, document_type=4, batch_size=self.settings.embedding_batch_size)
-    
+
     def whole_table_splitter(self, file_path: str) -> List[Any]:
         """split the table into chunks"""
 
         # wait until the csv file is available in the directory
-        print(file_path)
+        print(f'whole table splitter: {file_path}')
         while not os.path.exists(file_path):
             time.sleep(1)  # wait for 1 second before checking again
 
         # read in the csv file
-        try: 
+        try:
             df = pd.read_csv(file_path, chunksize=self.settings.csv_chunk_size)
         except FileNotFoundError:
             print(f'File not found: {file_path}, returning empty list')
@@ -2505,20 +2496,20 @@ class DataLoader(MultiModalDocumentProcessor):
         self.downloader.download(file_path, download=True)
 
         # Load in the documents
-        docs_raw = self.whole_table_splitter(f'{self.download_path_model.table_path}{file_path}')
+        docs_raw = self.whole_table_splitter(f'{self.download_path_model.table_path}/{file_path}')
 
         # Process the raw documents which goes straight into the raw rows database with chunking
         docs = self._process_documents[1](docs_raw, mode=1)  # mode=1 for table data
 
         # Process the CSV descriptions
-        description_doc, renamed_headers = self.csv_analyzer.generate_csv_description(f'{self.download_path_model.table_path}{file_path}')
+        description_doc, renamed_headers = self.csv_analyzer.generate_csv_description(f'{self.download_path_model.table_path}/{file_path}')
 
         # Process the written description of the tables, without the chunking taking in the description generated from before
-        description_docs = self.process_table_descriptions(description_doc, f'{self.download_path_model.table_path}{file_path}', renamed_headers)
+        description_docs = self.process_table_descriptions(description_doc, f'{self.download_path_model.table_path}/{file_path}', renamed_headers)
 
         # Delete the local file
         if not self.settings.retain_files_condition:
-            self.delete_file(f'{self.download_path_model.table_path}{file_path}')
+            self.delete_file(f'{self.download_path_model.table_path}/{file_path}')
 
         # Load the documents into the vector store
         self.load_documents(docs, document_type=2)
@@ -2531,7 +2522,7 @@ class DataLoader(MultiModalDocumentProcessor):
         self.downloader.download(file_path, download=True)
 
         # load in the documents with langchain document loader
-        docs_raw: list = self._markdown_reader(f'{self.download_path_model.markdown_path}{file_path}')
+        docs_raw: list = self._markdown_reader(f'{self.download_path_model.markdown_path}/{file_path}')
 
         # define the splitting ool
         splitter_tool: Any = self.create_splitter()['pdf'] # use this with the dropbox loader
@@ -2552,26 +2543,26 @@ class DataLoader(MultiModalDocumentProcessor):
     def loader(self, files: list, func: Callable) -> None:
         """define the functionality for loading documents into the vector database"""
 
-        # keep track of failed files 
+        # keep track of failed files
         failed_files: list = []
 
         # loop through each file
-        with ThreadPoolExecutor(max_workers=2) as executor:
+        with ThreadPoolExecutor(max_workers=1) as executor:
             # create the future object for all the files
             futures = {executor.submit(func, file_path): file_path for file_path in files}
             for future in as_completed(futures):
                 file_path = futures[future]
-                try:
-                    result = future.result()
-                except Exception as exc:
-                    print(f'File {file_path} generated an exception: {exc}')
-                    failed_files.append(file_path)
-            
-        # retry with a simple for loop 
+                if True:
+                    future.result()
+                #except Exception as exc:
+                #    print(f'File {file_path} generated an exception: {exc}')
+                #    failed_files.append(file_path)
+
+        # retry with a simple for loop
         for failed_file in failed_files:
-            try: 
+            try:
                 func(file_path)
-            except: 
+            except:
                 print(f'File {failed_file} failed to load AGAIN')
 
     def postprocess_vectordb(self):
@@ -2586,23 +2577,27 @@ class DataLoader(MultiModalDocumentProcessor):
 
         # get all the recent files in the directory from the root
         recent_files: list = self.get_recent_files(dbx=self.dbx)
+        print(recent_files)
 
         # group the files by their file types
         file_type_idx: dict = self.group_files_by_type(recent_files)
-        
+        print('file type idx: ', file_type_idx)
+
         # handle file deletion by checking if file is already in database and if yes then delete it and update the whole thing
         deleted_files: list = self.list_deleted_files(dbx=self.dbx)
-        print(deleted_files)
+        print('deleted files: ', deleted_files)
         for del_file in [file for sublist in [deleted_files, recent_files] for file in sublist]:
             print('file to delete: ', del_file)
             self.delete_documents(del_file)
 
         # define the directories that we will loop over
         for file_type, files in file_type_idx.items():
-            try:
+            if file_type not in self.pipeline_idx.keys():
+                continue
+            if True:
                 self.loader(files, self.pipeline_idx[file_type])
-            except KeyError:
-                print(f"File type not found: {file_type}")
+            #except KeyError:
+            #    print(f"File type not found: {file_type}")
 
         # postprocess the database
         self.postprocess_vectordb()
@@ -2610,7 +2605,7 @@ class DataLoader(MultiModalDocumentProcessor):
 
 class VespaColPaliSettings(BaseModel):
     """Settings for the ColPali model"""
-    
+
     colpali_schema: Schema = Schema(
         name="pdf_page",
         document=VespaDocument(
@@ -2635,7 +2630,7 @@ class VespaColPaliSettings(BaseModel):
     # define the name of the vespa application
     vespa_app_name: str = "jarviscolpali"
 
-     # define the parameters for the model and processor 
+     # define the parameters for the model and processor
     device_map: str = 'auto'
     torch_type: torch.dtype = torch.bfloat16
     model_name: str = "vidore/colpali-v1.2"
@@ -2650,20 +2645,20 @@ class VespaColPaliSettings(BaseModel):
     presentation_timing: bool = True
     max_inference_hits: int = 3
 
-    # allow arbitrary types in definitions 
+    # allow arbitrary types in definitions
     class Config:
         arbitrary_types_allowed = True
 
 
-class ColPaliLoader(Utilities): 
+class ColPaliLoader(Utilities):
     """Implementation of loading in images for colpali functionality with Vespa"""
 
     def __init__(self):
         super().__init__()
-        
+
         # Define the settings for the vespa application
         self.colpali_settings = VespaColPaliSettings()
-        
+
         # Device and type selection
         if torch.cuda.is_available():
             self.device = torch.device("cuda")
@@ -2674,13 +2669,13 @@ class ColPaliLoader(Utilities):
         else:
             self.device = torch.device("cpu")
             self.type = torch.float32
-        
+
         # Define the model and processor and setup the model
         self.model = None
         self.processor_colpali = None
         self.setup_colpali_model()
 
-        # define the colpali schema 
+        # define the colpali schema
         self.colpali_schema = None
 
         # define the vespa application
@@ -2709,7 +2704,7 @@ class ColPaliLoader(Utilities):
     def deploy_vespa_application_cloud(self, vespa_application_package):
         """Deploy the Vespa application using the cloud"""
         # Replace with your tenant name from the Vespa Cloud Console
-        tenant_name = "jarvis1" 
+        tenant_name = "jarvis1"
 
         # Get the API key from environment variable
         key = os.getenv("VESPA_TEAM_API_KEY", None)
@@ -2728,22 +2723,22 @@ class ColPaliLoader(Utilities):
         app = vespa_cloud.deploy()
 
         return app
-            
-    def _initialize_vespa_application(self): 
+
+    def _initialize_vespa_application(self):
         """Create the Vespa application"""
-        
-        # get the colpali schema from the settings model 
+
+        # get the colpali schema from the settings model
         self.colpali_schema = self.colpali_settings.colpali_schema
 
         # Create an ApplicationPackage instance for Vespa
         vespa_application_package = ApplicationPackage(
             # Set the name of the Vespa application from the settings
             name=self.colpali_settings.vespa_app_name,
-            
+
             # This schema determines the structure of documents in the Vespa application
             schema=[self.colpali_settings.colpali_schema]
         )
-        
+
         # add the reranker schema to the vespa application package
         self.colpali_schema = self._create_colpali_reranker_schema(self.colpali_schema)
 
@@ -2754,17 +2749,17 @@ class ColPaliLoader(Utilities):
     def _create_colpali_reranker_schema(self, colpali_schema):
         """
         Create the reranker schema for the ColPali model.
-        
+
         Args:
             colpali_schema (Schema): The existing Vespa schema to add the rank profile to.
-        
+
         Returns:
             Schema: The updated Vespa schema with the new rank profile.
         """
         # Define input query tensors
         input_query_tensors = []
         MAX_QUERY_TERMS = 64  # Maximum number of query terms to consider
-        
+
         # Create tensors for each query term
         for i in range(MAX_QUERY_TERMS):
             # Each query term is represented as a 16-dimensional int8 tensor
@@ -2773,7 +2768,7 @@ class ColPaliLoader(Utilities):
         # Add a tensor for the full query representation
         # This is a float tensor with dimensions (number of query tokens, 128)
         input_query_tensors.append(("query(qt)", "tensor<float>(querytoken{}, v[128])"))
-        
+
         # Add a binary tensor representation of the query
         # This is an int8 tensor with dimensions (number of query tokens, 16)
         input_query_tensors.append(("query(qtb)", "tensor<int8>(querytoken{}, v[16])"))
@@ -2828,7 +2823,7 @@ class ColPaliLoader(Utilities):
         try:
             # Initialize the processor
             self.processor_colpali = cast(ColPaliProcessor, ColPaliProcessor.from_pretrained(self.colpali_settings.model_name))
-            
+
             # Initialize the model
             self.model = cast(
                 ColPali,
@@ -2838,10 +2833,10 @@ class ColPaliLoader(Utilities):
                     device_map=self.colpali_settings.device_map,  # Adjust as needed
                 )
             )
-            
+
             # Move the model to the device
             self.model.to(self.device)
-            
+
             print("ColPali model and processor initialized successfully.")
         except Exception as e:
             print(f"Error initializing ColPali model and processor: {str(e)}")
@@ -2873,28 +2868,28 @@ class ColPaliLoader(Utilities):
 
     def get_pdf_images(self, file_path: str):
         """Get the images and text from a PDF file."""
-        
+
         # Initialize a PDF reader
         reader = PdfReader(file_path)
-        
+
         # Initialize a list to store text from each page
         page_texts = []
-        
+
         # Extract text from each page of the PDF
         for page_number in range(len(reader.pages)):
             page = reader.pages[page_number]
             text = page.extract_text()
             page_texts.append(text)
-        
+
         # Convert each page of the PDF to an image
         images = convert_from_path(file_path)
-        
+
         # Ensure that the number of images matches the number of text extractions
         assert len(images) == len(page_texts), "Mismatch between number of images and text extractions"
-        
+
         # Clean up: delete the local file after processing
         self.delete_file(file_path)
-        
+
         # Return both the list of images and the list of page texts
         return images, page_texts
 
@@ -2908,7 +2903,7 @@ class ColPaliLoader(Utilities):
                     )
                     if not response.is_successful():
                         print(response.json())
-        
+
         asyncio.run(_ingest())
 
     def prepare_vespa_feed(self, processed_pdfs):
@@ -2920,14 +2915,14 @@ class ColPaliLoader(Utilities):
             for page_number, (page_text, embedding, image) in enumerate(zip(pdf['texts'], pdf['embeddings'], pdf['images'])):
                 # Scale the image and convert it to base64
                 base_64_image = self.get_base64_image(self.scale_image(image, 640), add_url_prefix=False)
-                
+
                 # Prepare the embedding dictionary
                 embedding_dict = {}
                 for idx, patch_embedding in enumerate(embedding):
                     # Convert the embedding to a binary vector and then to a hex string
                     binary_vector = np.packbits(np.where(patch_embedding > 0, 1, 0)).astype(np.int8).tobytes().hex()
                     embedding_dict[str(idx)] = binary_vector  # Convert idx to string for JSON compatibility
-                
+
                 # Create a dictionary for this page
                 page = {
                     "id": hash(url + str(page_number)),  # Create a unique ID for the page
@@ -2938,13 +2933,13 @@ class ColPaliLoader(Utilities):
                     "text": page_text,
                     "embedding": embedding_dict
                 }
-                
+
                 # Add the page to the Vespa feed
                 vespa_feed.append(page)
-        
+
         # Return the complete Vespa feed
         return vespa_feed
-    
+
     def _pdf_image_pipeline(self, file_path: str):
         """load in the pdf files and convert them to images"""
 
@@ -2956,13 +2951,13 @@ class ColPaliLoader(Utilities):
 
         # get the images from the pdf
         images, page_texts = self.get_pdf_images(local_file_path)
-        
+
         # delete the file
         self.delete_file(local_file_path)
 
         # return the images and page texts
         return images, page_texts
-        
+
     def _create_pdf_embeddings(self, processed_pdfs: list) -> list:
         """Create the embeddings for the PDFs"""
         for pdf in tqdm(processed_pdfs, desc="Creating PDF embeddings"):
@@ -3024,12 +3019,12 @@ class ColPaliLoader(Utilities):
         # ingest the vespa feed
         self.ingest_document_feed(vespa_feed)
 
-    def facade(self) -> None: 
+    def facade(self) -> None:
         """The facade method for running the document ingest and embedding creation"""
 
         # Get all the pdf files in the dropbox
         pdf_files = self.get_recent_files(self.dbx, file_type='pdf')
-      
+
         # Use ThreadPoolExecutor to process batches of files concurrently
         with ThreadPoolExecutor(max_workers=self.colpali_settings.runtime_batch_size) as executor:
             for i in range(0, len(pdf_files), self.colpali_settings.runtime_batch_size):
@@ -3067,10 +3062,10 @@ class ColPaliInference(ColPaliLoader):
             with torch.no_grad():
                 # Move batch to the appropriate device
                 batch_query = {k: v.to(self.device) for k, v in batch_query.items()}
-                
+
                 # Generate embeddings
                 embeddings_query = self.model(**batch_query)
-                
+
                 # Move embeddings to CPU and add to the list
                 query_embeddings.extend(list(torch.unbind(embeddings_query.to("cpu"))))
 
@@ -3088,10 +3083,10 @@ class ColPaliInference(ColPaliLoader):
         """
         # Convert the first query embedding to a list and enumerate it
         float_query_embedding = {k: v.tolist() for k, v in enumerate(qs[0])}
-        
+
         # Initialize an empty dictionary for binary query embeddings
         binary_query_embeddings = {}
-        
+
         # Convert float embeddings to binary (0 or 1) and then to packed int8
         for k, v in float_query_embedding.items():
             # Convert positive values to 1 and non-positive to 0
@@ -3106,7 +3101,7 @@ class ColPaliInference(ColPaliLoader):
             "input.query(qtb)": binary_query_embeddings,  # Binary query embedding
             "input.query(qt)": float_query_embedding      # Float query embedding
         }
-        
+
         # Add individual binary embeddings as separate tensors
         for i in range(len(binary_query_embeddings)):
             query_tensors[f"input.query(rq{i})"] = binary_query_embeddings[i]
@@ -3122,12 +3117,12 @@ class ColPaliInference(ColPaliLoader):
             target_hits_per_query_tensor (int): The target number of hits per query tensor."""
 
         # construct the nn query
-        nn = [f"({{targetHits:{target_hits_per_query_tensor}}}nearestNeighbor(embedding,rq{i}))" 
+        nn = [f"({{targetHits:{target_hits_per_query_tensor}}}nearestNeighbor(embedding,rq{i}))"
                   for i in range(len(query_tensors) - 2)]  # -2 to exclude 'qtb' and 'qt'
-        
+
         # join the nn queries with OR
         nn = " OR ".join(nn)
-        return nn 
+        return nn
 
     def _process_hits(self, query: str, response: VespaQueryResponse):
         """
@@ -3146,7 +3141,7 @@ class ColPaliInference(ColPaliLoader):
             "query": query,
             "hits": []
         }
-        
+
         for hit in response.hits:
             # Decode the image bytes
             image_bytes = base64.b64decode(hit['fields']['image'])
@@ -3159,7 +3154,7 @@ class ColPaliInference(ColPaliLoader):
                 "image_bytes": image_bytes,
                 "relevance": hit['relevance']
             })
-        
+
         return results
 
     async def inference(self, query: str):
@@ -3197,11 +3192,11 @@ class ColPaliInference(ColPaliLoader):
 
             # Check if the query was successful
             assert response.is_successful()
-            
+
             # Process the hits from the Vespa response
             results = self._process_hits(query, response)
-            
-            return results  
+
+            return results
 
     def run_inference(self, query: str):
         """
@@ -3263,21 +3258,6 @@ class ColPaliInference(ColPaliLoader):
 
 
 data_loader = DataLoader()
+#data_loader.csv_analyzer.generate_csv_description('/content/manual_upload/employee_roster_data.csv')
 #multimodal_obj = MultiModalDocumentProcessor()
 #data_loader.facade()
-#data_loader._table_pipeline('/Products_by_producer_distributor.csv')
-#data_loader._text_pipeline_multimodal('/book_test.pdf')
-#data_loader.postprocess_vectordb()
-#filename = '/content/taboo-ratings-v3.csv'
-#data_loader.csv_analyzer.generate_csv_description(filename)
-#data_loader.refresh_access_token()
-#data_loader.csv_analyzer._upload_to_dropbox('/content/tables/consentresultspublic.csv')
-
-# test out the Colpali loader inference
-#colpali_loader = ColPaliInference()
-#colpali_loader._pdf_image_pipeline(['/book_test.pdf'])
-
-#data_loader.move_file_manually('/book_test.pdf', source_dir=data_loader.download_path_model.table_path, local_dir=data_loader.download_path_model.coding_path)
-
-
-print('done')

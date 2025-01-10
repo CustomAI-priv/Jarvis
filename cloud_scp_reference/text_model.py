@@ -909,13 +909,14 @@ class TextModel(RAGModelUtilities):
             })
             | RunnableLambda(lambda x: {
                 "response": self.data_loader.format_output(x['llm_response']['response']),
-                "combined_context": x["combined_context"]
-            })
-            | RunnableLambda(lambda x: {
-                "response": x["response"],
+                # "combined_context": x["combined_context"]
                 "references": self.generate_citations(x["combined_context"], source_field=kwargs['source_field']), 
-                'combined_context': x['combined_context']
             })
+            # | RunnableLambda(lambda x: {
+            #     "response": x["response"],
+            #     "references": self.generate_citations(x["combined_context"], source_field=kwargs['source_field']), 
+            #     # 'combined_context': x['combined_context']
+            # })
         )
 
         return final_rag_chain
@@ -1235,8 +1236,8 @@ username = 'testuser'
 email = 'testuser@example.com'
 password = 'securepassword'
 model_type = 1 # text model 
-# chat_id = 2
-# user_id=1
+chat_id = 2
+user_id=1
 
 #model = TextModel(stream_url='http://5.78.113.143:8005/stream')
 #print(model.invoke("What is an endogenous variable in econometrics?", disable_tabular=False, 

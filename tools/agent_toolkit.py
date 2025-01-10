@@ -3034,7 +3034,6 @@ class StatisticalTools(ToolkitUtilities):
         return fig
 
        
-    
 file_path: str = '/content/california_housing_test.csv'
 charting_tools = ChartingTools()
 
